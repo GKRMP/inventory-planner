@@ -1,0 +1,53 @@
+{
+  "theme_extension": {
+    "name": "inventory-planning-schema",
+    "metafields": [
+      {
+        "namespace": "inventory_planning",
+        "key": "daily_demand_historical",
+        "type": "integer",
+        "name": "Daily Demand (Historical)",
+        "description": "Historical average daily demand for this SKU",
+        "owner_type": "variant"
+      }
+    ],
+    "metaobjects": [
+      {
+        "type": "supplier",
+        "name": "Supplier",
+        "fields": [
+          { "key": "supplier_id", "name": "Supplier ID", "type": "single_line_text", "required": true },
+          { "key": "supplier_name", "name": "Supplier Name", "type": "single_line_text", "required": true },
+          { "key": "contact_name_1", "name": "Contact Name 1", "type": "single_line_text" },
+          { "key": "contact_name_2", "name": "Contact Name 2", "type": "single_line_text" },
+          { "key": "address_1", "name": "Address 1", "type": "single_line_text" },
+          { "key": "address_2", "name": "Address 2", "type": "single_line_text" },
+          { "key": "city", "name": "City", "type": "single_line_text" },
+          { "key": "zip", "name": "ZIP / Postal Code", "type": "single_line_text" },
+          { "key": "country", "name": "Country", "type": "single_line_text" },
+          { "key": "phone_1", "name": "Phone 1", "type": "single_line_text" },
+          { "key": "phone_2", "name": "Phone 2", "type": "single_line_text" },
+          { "key": "email_1", "name": "Email 1", "type": "single_line_text" },
+          { "key": "email_2", "name": "Email 2", "type": "single_line_text" },
+          { "key": "website", "name": "Website", "type": "url" },
+          { "key": "notes", "name": "Notes", "type": "multi_line_text" }
+        ]
+      },
+      {
+        "type": "supplier_part",
+        "name": "Supplier Part",
+        "fields": [
+          { "key": "product", "name": "Product", "type": "product_reference", "required": true },
+          { "key": "sku", "name": "SKU", "type": "single_line_text", "required": true },
+          { "key": "supplier", "name": "Supplier", "type": "metaobject_reference", "metaobject_type": "supplier", "required": true },
+          { "key": "lead_time_days", "name": "Lead Time (Days)", "type": "integer", "required": true },
+          { "key": "last_order_date", "name": "Last Order Date", "type": "date" },
+          { "key": "last_order_cpu", "name": "Last Order Cost Per Unit", "type": "decimal" },
+          { "key": "last_order_quantity", "name": "Last Order Quantity", "type": "integer" },
+          { "key": "threshold", "name": "Minimum Threshold", "type": "integer" },
+          { "key": "notes", "name": "Notes", "type": "multi_line_text" }
+        ]
+      }
+    ]
+  }
+}
