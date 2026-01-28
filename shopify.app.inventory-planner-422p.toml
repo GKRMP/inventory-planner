@@ -13,7 +13,7 @@ api_version = "2026-04"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "write_products,read_metaobject_definitions,write_metaobject_definitions,read_metaobjects,write_metaobjects"
+scopes = "read_metaobject_definitions,read_metaobjects,write_metaobject_definitions,write_metaobjects,write_products"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://inventory-planner-4rvw.onrender.com/auth/callback" ]
