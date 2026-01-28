@@ -2,7 +2,7 @@
 
 client_id = "0e3de3307af340c3981d819a4799239d"
 name = "RMP Inventory Planner"
-application_url = "https://example.com"
+application_url = "https://inventory-planner-4rvw.onrender.com"
 embedded = true
 
 [build]
