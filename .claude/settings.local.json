@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(sqlite3:*)",
+      "Bash(node clear-sessions.js:*)",
+      "Bash(shopify app config:*)",
+      "Bash(shopify app deploy:*)",
+      "Bash(npx prisma migrate:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(if exist node_modules.vite rmdir /s /q node_modules.vite)",
+      "Bash(curl:*)",
+      "Bash(npm run shopify app generate extension:*)",
+      "mcp__shopify-dev-mcp__learn_shopify_api",
+      "Bash(npm install:*)",
+      "Bash(npx prisma db push:*)",
+      "Bash(PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION=\"yes\" npx prisma db push:*)"
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+SKU,SupplierID,IsPrimary,LeadTime,Threshold,DailyDemand,LastOrderDate,LastOrderCPU,LastOrderQty,Notes
+ABC-001,1001,Y,14,10,2.5,2024-01-15,25.99,50,Primary vendor - good quality
+ABC-001,1002,N,21,5,1.0,2024-02-01,22.50,25,Backup supplier
+XYZ-002,1003,Y,7,20,5.0,2024-03-01,15.00,100,Fast shipping

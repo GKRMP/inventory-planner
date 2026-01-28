@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bulk Import Suppliers</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #f6f6f7;
+      padding: 40px 20px;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: white;
+      padding: 40px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+
+    h1 {
+      font-size: 24px;
+      margin-bottom: 8px;
+      color: #202223;
+    }
+
+    .subtitle {
+      color: #6d7175;
+      margin-bottom: 32px;
+    }
+
+    .section {
+      margin-bottom: 32px;
+    }
+
+    .section h2 {
+      font-size: 18px;
+      margin-bottom: 16px;
+      color: #202223;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 300px;
+      padding: 12px;
+      border: 1px solid #c9cccf;
+      border-radius: 4px;
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 13px;
+      resize: vertical;
+    }
+
+    textarea:focus {
+      outline: none;
+      border-color: #005bd3;
+      box-shadow: 0 0 0 1px #005bd3;
+    }
+
+    button {
+      background: #008060;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    button:hover {
+      background: #006e52;
+    }
+
+    button:disabled {
+      background: #c9cccf;
+      cursor: not-allowed;
+    }
+
+    .help-text {
+      font-size: 13px;
+      color: #6d7175;
+      margin-top: 8px;
+    }
+
+    .code-block {
+      background: #f6f6f7;
+      padding: 16px;
+      border-radius: 4px;
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 12px;
+      margin: 16px 0;
+      overflow-x: auto;
+    }
+
+    #results {
+      margin-top: 24px;
+      padding: 16px;
+      border-radius: 4px;
+      display: none;
+    }
+
+    #results.success {
+      background: #d1f7e5;
+      border: 1px solid #00a047;
+      display: block;
+    }
+
+    #results.error {
+      background: #fed3d1;
+      border: 1px solid #d72c0d;
+      display: block;
+    }
+
+    .result-item {
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(0,0,0,0.1);
+    }
+
+    .result-item:last-child {
+      border-bottom: none;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid #f3f3f3;
+      border-top: 2px solid #008060;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Bulk Import Suppliers</h1>
+    <p class="subtitle">Import multiple suppliers at once using JSON format</p>
+
+    <div class="section">
+      <h2>Instructions</h2>
+      <ol style="margin-left: 20px; line-height: 1.8;">
+        <li>Make sure you've run "Setup Supplier Definition" in the Suppliers page</li>
+        <li>Paste your supplier data in JSON format below</li>
+        <li>Click "Import Suppliers"</li>
+        <li>Wait for the import to complete</li>
+      </ol>
+    </div>
+
+    <div class="section">
+      <h2>JSON Format</h2>
+      <div class="code-block">
+{
+  "suppliers": [
+    {
+      "supplier_id": "SUP-001",
+      "supplier_name": "Acme Corp",
+      "contact_name": "John Doe",
+      "address": "123 Main St",
+      "city": "New York",
+      "state": "NY",
+      "zip": "10001",
+      "country": "US",
+      "phone_1": "555-1234",
+      "email_1": "john@acme.com",
+      "website": "https://acme.com",
+      "notes": "Primary supplier"
+    }
+  ]
+}
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Paste JSON Data</h2>
+      <textarea id="jsonInput" placeholder='Paste your JSON here...'></textarea>
+      <p class="help-text">All fields except supplier_id and supplier_name are optional</p>
+    </div>
+
+    <button id="importBtn" onclick="importSuppliers()">Import Suppliers</button>
+
+    <div id="results"></div>
+  </div>
+
+  <script>
+    async function importSuppliers() {
+      const jsonInput = document.getElementById('jsonInput');
+      const importBtn = document.getElementById('importBtn');
+      const results = document.getElementById('results');
+
+      // Validate JSON
+      let data;
+      try {
+        data = JSON.parse(jsonInput.value);
+        if (!data.suppliers || !Array.isArray(data.suppliers)) {
+          throw new Error('Invalid format. Expected { suppliers: [...] }');
+        }
+      } catch (error) {
+        results.className = 'error';
+        results.innerHTML = `<strong>Error:</strong> ${error.message}`;
+        return;
+      }
+
+      // Disable button and show loading
+      importBtn.disabled = true;
+      importBtn.innerHTML = 'Importing<span class="spinner"></span>';
+      results.style.display = 'none';
+
+      try {
+        const response = await fetch('/api/bulk-import-suppliers', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(data),
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.error || 'Import failed');
+        }
+
+        // Display results
+        const successCount = result.success.length;
+        const failedCount = result.failed.length;
+
+        let html = `<h3>Import Complete</h3>`;
+        html += `<p><strong>Total:</strong> ${result.total} | <strong>Success:</strong> ${successCount} | <strong>Failed:</strong> ${failedCount}</p>`;
+
+        if (successCount > 0) {
+          html += `<h4 style="margin-top: 16px;">Successful Imports:</h4>`;
+          result.success.forEach(item => {
+            html += `<div class="result-item">✓ ${item.supplier}</div>`;
+          });
+        }
+
+        if (failedCount > 0) {
+          html += `<h4 style="margin-top: 16px;">Failed Imports:</h4>`;
+          result.failed.forEach(item => {
+            html += `<div class="result-item">✗ ${item.supplier}: ${item.error}</div>`;
+          });
+        }
+
+        results.className = failedCount === 0 ? 'success' : 'error';
+        results.innerHTML = html;
+
+      } catch (error) {
+        results.className = 'error';
+        results.innerHTML = `<strong>Error:</strong> ${error.message}`;
+      } finally {
+        importBtn.disabled = false;
+        importBtn.textContent = 'Import Suppliers';
+      }
+    }
+  </script>
+</body>
+</html>

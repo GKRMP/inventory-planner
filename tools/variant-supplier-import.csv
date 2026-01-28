@@ -1,0 +1,4 @@
+﻿SKU,SupplierID,IsPrimary,LeadTime,Threshold,DailyDemand,LastOrderDate,LastOrderCPU,LastOrderQty,Notes
+100,123,Y,14,10,2.5,1/15/2024,25.99,50,Primary vendor
+101,123,N,21,5,1,2/1/2024,22.5,25,Backup supplier
+101,5000,Y,7,20,5,3/1/2024,15,100,Fast shipping
