@@ -1,4 +1,4 @@
-import { useLoaderData } from "react-router";
+import { useLoaderData, useNavigate } from "react-router";
 import {
   Page,
   Card,
@@ -21,41 +21,41 @@ export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
   try {
-    // Helper function to fetch all products with pagination
-    async function fetchAllProducts() {
-      let allProducts = [];
-      let hasNextPage = true;
-      let cursor = null;
+    // Get URL params for pagination
+    const url = new URL(request.url);
+    const cursor = url.searchParams.get("cursor");
+    const direction = url.searchParams.get("direction") || "forward";
+    const riskFilter = url.searchParams.get("risk") || "";
 
-      while (hasNextPage) {
-        const productsQuery = `
-          query GetProducts($cursor: String) {
-            products(first: 250, after: $cursor) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              edges {
-                node {
-                  id
-                  title
-                  status
-                  variants(first: 250) {
-                    edges {
-                      node {
-                        id
-                        sku
-                        title
-                        inventoryQuantity
-                        metafields(first: 10) {
-                          edges {
-                            node {
-                              id
-                              namespace
-                              key
-                              value
-                            }
-                          }
+    // Fetch one page of products (50 products at a time for speed)
+    const productsQuery = direction === "backward" ? `
+      query GetProducts($cursor: String) {
+        products(last: 50, before: $cursor, query: "status:ACTIVE") {
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
+          edges {
+            node {
+              id
+              title
+              status
+              variants(first: 100) {
+                edges {
+                  node {
+                    id
+                    sku
+                    title
+                    inventoryQuantity
+                    metafields(first: 10) {
+                      edges {
+                        node {
+                          id
+                          namespace
+                          key
+                          value
                         }
                       }
                     }
@@ -64,30 +64,47 @@ export async function loader({ request }) {
               }
             }
           }
-        `;
-
-        const response = await admin.graphql(productsQuery, {
-          variables: { cursor },
-        });
-        const data = await response.json();
-
-        if (data.errors) {
-          console.error("GraphQL errors:", data.errors);
-          break;
         }
-
-        if (!data.data || !data.data.products) {
-          console.error("Unexpected response:", data);
-          break;
-        }
-
-        allProducts = [...allProducts, ...data.data.products.edges];
-        hasNextPage = data.data.products.pageInfo.hasNextPage;
-        cursor = data.data.products.pageInfo.endCursor;
       }
-
-      return allProducts;
-    }
+    ` : `
+      query GetProducts($cursor: String) {
+        products(first: 50, after: $cursor, query: "status:ACTIVE") {
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
+          edges {
+            node {
+              id
+              title
+              status
+              variants(first: 100) {
+                edges {
+                  node {
+                    id
+                    sku
+                    title
+                    inventoryQuantity
+                    metafields(first: 10) {
+                      edges {
+                        node {
+                          id
+                          namespace
+                          key
+                          value
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
 
     // Fetch all suppliers
     const suppliersQuery = `
@@ -107,44 +124,51 @@ export async function loader({ request }) {
       }
     `;
 
-    const [productEdges, suppliersResponse] = await Promise.all([
-      fetchAllProducts(),
+    const [productsResponse, suppliersResponse] = await Promise.all([
+      admin.graphql(productsQuery, {
+        variables: { cursor },
+      }),
       admin.graphql(suppliersQuery),
     ]);
 
+    const productsData = await productsResponse.json();
     const suppliersData = await suppliersResponse.json();
+
+    if (productsData.errors) {
+      console.error("Products GraphQL errors:", productsData.errors);
+      return { variants: [], suppliers: [], pageInfo: null, currentRisk: riskFilter };
+    }
 
     if (!suppliersData.data || !suppliersData.data.metaobjects) {
       console.error("Suppliers response error:", suppliersData);
-      return { variants: [], suppliers: [] };
+      return { variants: [], suppliers: [], pageInfo: null, currentRisk: riskFilter };
     }
 
-    // Transform data for easier use - only include ACTIVE products
+    // Transform data for easier use
     const variants = [];
+    const productEdges = productsData.data?.products?.edges || [];
     productEdges.forEach((productEdge) => {
       const product = productEdge.node;
-      // Only include active products in the report
-      if (product.status === "ACTIVE") {
-        product.variants.edges.forEach((variantEdge) => {
-          const variant = variantEdge.node;
-          variants.push({
-            id: variant.id,
-            sku: variant.sku,
-            variantTitle: variant.title,
-            productTitle: product.title,
-            inventoryQuantity: variant.inventoryQuantity || 0,
-            metafields: variant.metafields.edges.map((m) => m.node),
-          });
+      product.variants.edges.forEach((variantEdge) => {
+        const variant = variantEdge.node;
+        variants.push({
+          id: variant.id,
+          sku: variant.sku,
+          variantTitle: variant.title,
+          productTitle: product.title,
+          inventoryQuantity: variant.inventoryQuantity || 0,
+          metafields: variant.metafields.edges.map((m) => m.node),
         });
-      }
+      });
     });
 
     const suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
+    const pageInfo = productsData.data?.products?.pageInfo || null;
 
-    return { variants, suppliers };
+    return { variants, suppliers, pageInfo, currentRisk: riskFilter };
   } catch (error) {
     console.error("Report loader error:", error);
-    return { variants: [], suppliers: [] };
+    return { variants: [], suppliers: [], pageInfo: null, currentRisk: "" };
   }
 }
 
@@ -255,17 +279,14 @@ function calculateMetrics(variant, suppliers) {
 }
 
 export default function Report() {
-  const { variants, suppliers } = useLoaderData();
+  const { variants, suppliers, pageInfo, currentRisk } = useLoaderData();
+  const navigate = useNavigate();
   const [queryValue, setQueryValue] = useState("");
-  const [riskFilter, setRiskFilter] = useState([]);
+  const [riskFilter, setRiskFilter] = useState(currentRisk ? [currentRisk] : []);
   const [selectedTab, setSelectedTab] = useState(0);
   const [sortedColumn, setSortedColumn] = useState("daysUntilStockout");
   const [sortDirection, setSortDirection] = useState("ascending");
   const { mode, setMode } = useSetIndexFiltersMode();
-
-  // Pagination state
-  const ITEMS_PER_PAGE = 50;
-  const [currentPage, setCurrentPage] = useState(1);
 
   // Define tabs for risk levels
   const tabs = [
@@ -279,7 +300,6 @@ export default function Report() {
 
   const handleTabChange = useCallback((index) => {
     setSelectedTab(index);
-    setCurrentPage(1); // Reset to first page on tab change
     const tab = tabs[index];
     if (tab.riskValue) {
       setRiskFilter([tab.riskValue]);
@@ -287,6 +307,29 @@ export default function Report() {
       setRiskFilter([]);
     }
   }, []);
+
+  // Server-side pagination handlers
+  const handleNextPage = useCallback(() => {
+    if (pageInfo?.hasNextPage && pageInfo?.endCursor) {
+      const risk = riskFilter.length > 0 ? riskFilter[0] : "";
+      const params = new URLSearchParams();
+      params.set("cursor", pageInfo.endCursor);
+      params.set("direction", "forward");
+      if (risk) params.set("risk", risk);
+      navigate(`/app/report?${params.toString()}`);
+    }
+  }, [pageInfo, riskFilter, navigate]);
+
+  const handlePreviousPage = useCallback(() => {
+    if (pageInfo?.hasPreviousPage && pageInfo?.startCursor) {
+      const risk = riskFilter.length > 0 ? riskFilter[0] : "";
+      const params = new URLSearchParams();
+      params.set("cursor", pageInfo.startCursor);
+      params.set("direction", "backward");
+      if (risk) params.set("risk", risk);
+      navigate(`/app/report?${params.toString()}`);
+    }
+  }, [pageInfo, riskFilter, navigate]);
 
   // Calculate metrics for all variants
   const variantsWithMetrics = useMemo(() => {
@@ -296,11 +339,11 @@ export default function Report() {
     }));
   }, [variants, suppliers]);
 
-  // Filter and sort
-  const filteredVariants = useMemo(() => {
+  // Filter and sort (client-side on current page)
+  const displayedVariants = useMemo(() => {
     let filtered = variantsWithMetrics;
 
-    // Search filter
+    // Search filter (client-side)
     if (queryValue) {
       filtered = filtered.filter(
         (v) =>
@@ -309,7 +352,7 @@ export default function Report() {
       );
     }
 
-    // Risk filter
+    // Risk filter (client-side on current page)
     if (riskFilter.length > 0) {
       filtered = filtered.filter((v) => riskFilter.includes(v.metrics.riskLevel));
     }
@@ -334,15 +377,15 @@ export default function Report() {
         case "onHand":
           aVal = a.inventoryQuantity;
           bVal = b.inventoryQuantity;
-          break;
+          return sortDirection === "ascending" ? aVal - bVal : bVal - aVal;
         case "dailyDemand":
           aVal = a.metrics.dailyDemand;
           bVal = b.metrics.dailyDemand;
-          break;
+          return sortDirection === "ascending" ? aVal - bVal : bVal - aVal;
         case "threshold":
           aVal = a.metrics.threshold;
           bVal = b.metrics.threshold;
-          break;
+          return sortDirection === "ascending" ? aVal - bVal : bVal - aVal;
         case "supplier":
           aVal = a.metrics.supplierName || "";
           bVal = b.metrics.supplierName || "";
@@ -352,40 +395,32 @@ export default function Report() {
         case "leadTime":
           aVal = a.metrics.leadTime;
           bVal = b.metrics.leadTime;
-          break;
+          return sortDirection === "ascending" ? aVal - bVal : bVal - aVal;
         case "annualDemand":
           aVal = a.metrics.annualizedDemand;
           bVal = b.metrics.annualizedDemand;
-          break;
+          return sortDirection === "ascending" ? aVal - bVal : bVal - aVal;
         case "daysUntilStockout":
           aVal = a.metrics.daysUntilStockout;
           bVal = b.metrics.daysUntilStockout;
-          break;
+          return sortDirection === "ascending" ? aVal - bVal : bVal - aVal;
         case "reorderPoint":
           aVal = a.metrics.reorderPoint;
           bVal = b.metrics.reorderPoint;
-          break;
+          return sortDirection === "ascending" ? aVal - bVal : bVal - aVal;
         case "suggestedOrder":
           aVal = a.metrics.suggestedOrderSize;
           bVal = b.metrics.suggestedOrderSize;
-          break;
+          return sortDirection === "ascending" ? aVal - bVal : bVal - aVal;
         default:
           aVal = a.metrics.daysUntilStockout;
           bVal = b.metrics.daysUntilStockout;
+          return sortDirection === "ascending" ? aVal - bVal : bVal - aVal;
       }
-
-      return sortDirection === "ascending" ? aVal - bVal : bVal - aVal;
     });
 
     return filtered;
   }, [variantsWithMetrics, queryValue, riskFilter, sortedColumn, sortDirection]);
-
-  // Paginated variants
-  const totalPages = Math.ceil(filteredVariants.length / ITEMS_PER_PAGE);
-  const paginatedVariants = useMemo(() => {
-    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-    return filteredVariants.slice(startIndex, startIndex + ITEMS_PER_PAGE);
-  }, [filteredVariants, currentPage]);
 
   const handleSort = useCallback((index, direction) => {
     const columnMap = [
@@ -399,23 +434,19 @@ export default function Report() {
 
   const handleFiltersQueryChange = useCallback((value) => {
     setQueryValue(value);
-    setCurrentPage(1); // Reset to first page on search
   }, []);
 
   const handleFiltersClearAll = useCallback(() => {
     setQueryValue("");
     setRiskFilter([]);
-    setCurrentPage(1);
   }, []);
 
   const handleRiskFilterChange = useCallback((value) => {
     setRiskFilter(value);
-    setCurrentPage(1);
   }, []);
 
   const handleRiskFilterRemove = useCallback(() => {
     setRiskFilter([]);
-    setCurrentPage(1);
   }, []);
 
   const filters = [
@@ -468,10 +499,7 @@ export default function Report() {
             queryValue={queryValue}
             queryPlaceholder="Search by SKU or Product..."
             onQueryChange={handleFiltersQueryChange}
-            onQueryClear={() => {
-              setQueryValue("");
-              setCurrentPage(1);
-            }}
+            onQueryClear={() => setQueryValue("")}
             filters={filters}
             appliedFilters={appliedFilters}
             onClearAll={handleFiltersClearAll}
@@ -485,7 +513,7 @@ export default function Report() {
           <Card padding="0">
             <IndexTable
               resourceName={{ singular: "product", plural: "products" }}
-              itemCount={filteredVariants.length}
+              itemCount={displayedVariants.length}
               headings={[
                 { title: "Risk" },
                 { title: "SKU" },
@@ -511,7 +539,7 @@ export default function Report() {
               }
               onSort={handleSort}
             >
-              {paginatedVariants.map((variant, index) => (
+              {displayedVariants.map((variant, index) => (
                 <IndexTable.Row id={variant.id} key={variant.id} position={index}>
                   <IndexTable.Cell>
                     <Badge tone={variant.metrics.riskColor}>
@@ -559,17 +587,17 @@ export default function Report() {
             </IndexTable>
           </Card>
 
-          {/* Pagination */}
-          {totalPages > 1 && (
+          {/* Server-side Pagination */}
+          {pageInfo && (pageInfo.hasPreviousPage || pageInfo.hasNextPage) && (
             <InlineStack align="center" gap="400">
               <Text variant="bodySm" as="span" tone="subdued">
-                Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredVariants.length)} of {filteredVariants.length} variants
+                Showing {displayedVariants.length} variants on this page
               </Text>
               <Pagination
-                hasPrevious={currentPage > 1}
-                hasNext={currentPage < totalPages}
-                onPrevious={() => setCurrentPage(currentPage - 1)}
-                onNext={() => setCurrentPage(currentPage + 1)}
+                hasPrevious={pageInfo.hasPreviousPage}
+                hasNext={pageInfo.hasNextPage}
+                onPrevious={handlePreviousPage}
+                onNext={handleNextPage}
               />
             </InlineStack>
           )}

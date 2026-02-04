@@ -8,6 +8,7 @@ import {
   BlockStack,
   InlineStack,
   Badge,
+  Spinner,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
@@ -17,28 +18,40 @@ export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
   try {
-    // Fetch all products with variants and inventory
-    const productsQuery = `
-      {
-        products(first: 250) {
-          edges {
-            node {
-              id
-              title
-              variants(first: 250) {
-                edges {
-                  node {
-                    id
-                    sku
-                    title
-                    inventoryQuantity
-                    metafields(first: 10) {
-                      edges {
-                        node {
-                          id
-                          namespace
-                          key
-                          value
+    // Helper function to fetch all products with pagination
+    async function fetchAllProducts() {
+      let allProducts = [];
+      let hasNextPage = true;
+      let cursor = null;
+
+      while (hasNextPage) {
+        const productsQuery = `
+          query GetProducts($cursor: String) {
+            products(first: 250, after: $cursor) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              edges {
+                node {
+                  id
+                  title
+                  variants(first: 100) {
+                    edges {
+                      node {
+                        id
+                        sku
+                        title
+                        inventoryQuantity
+                        metafields(first: 10) {
+                          edges {
+                            node {
+                              id
+                              namespace
+                              key
+                              value
+                            }
+                          }
                         }
                       }
                     }
@@ -47,9 +60,30 @@ export async function loader({ request }) {
               }
             }
           }
+        `;
+
+        const response = await admin.graphql(productsQuery, {
+          variables: { cursor },
+        });
+        const data = await response.json();
+
+        if (data.errors) {
+          console.error("GraphQL errors:", data.errors);
+          break;
         }
+
+        if (!data.data || !data.data.products) {
+          console.error("Unexpected response:", data);
+          break;
+        }
+
+        allProducts = [...allProducts, ...data.data.products.edges];
+        hasNextPage = data.data.products.pageInfo.hasNextPage;
+        cursor = data.data.products.pageInfo.endCursor;
       }
-    `;
+
+      return allProducts;
+    }
 
     // Fetch all suppliers
     const suppliersQuery = `
@@ -69,22 +103,21 @@ export async function loader({ request }) {
       }
     `;
 
-    const [productsResponse, suppliersResponse] = await Promise.all([
-      admin.graphql(productsQuery),
+    const [productEdges, suppliersResponse] = await Promise.all([
+      fetchAllProducts(),
       admin.graphql(suppliersQuery),
     ]);
 
-    const productsData = await productsResponse.json();
     const suppliersData = await suppliersResponse.json();
 
-    if (!productsData.data || !suppliersData.data) {
-      console.error("API Response error:", { productsData, suppliersData });
+    if (!suppliersData.data || !suppliersData.data.metaobjects) {
+      console.error("Suppliers response error:", suppliersData);
       return { variants: [], suppliers: [] };
     }
 
     // Transform data
     const variants = [];
-    productsData.data.products.edges.forEach((productEdge) => {
+    productEdges.forEach((productEdge) => {
       const product = productEdge.node;
       product.variants.edges.forEach((variantEdge) => {
         const variant = variantEdge.node;
@@ -275,7 +308,7 @@ export default function SupplierDashboard() {
       }),
       { totalVariants: 0, atRiskVariants: 0, totalValue: 0, needsReorder: 0 }
     );
-  }, [supplierStats]);
+  }, [supplierStatsRaw]);
 
   return (
     <>
