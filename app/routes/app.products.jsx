@@ -28,41 +28,44 @@ export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
   try {
-    // Helper function to fetch all products with pagination
-    async function fetchAllProducts() {
-      let allProducts = [];
-      let hasNextPage = true;
-      let cursor = null;
+    // Get URL params for pagination
+    const url = new URL(request.url);
+    const cursor = url.searchParams.get("cursor");
+    const direction = url.searchParams.get("direction") || "forward";
+    const statusFilter = url.searchParams.get("status") || "ACTIVE";
 
-      while (hasNextPage) {
-        const productsQuery = `
-          query GetProducts($cursor: String) {
-            products(first: 250, after: $cursor) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              edges {
-                node {
-                  id
-                  title
-                  status
-                  variants(first: 250) {
-                    edges {
-                      node {
-                        id
-                        sku
-                        title
-                        inventoryQuantity
-                        metafields(first: 10) {
-                          edges {
-                            node {
-                              id
-                              namespace
-                              key
-                              value
-                            }
-                          }
+    // Build query filter
+    const queryFilter = statusFilter ? `status:${statusFilter}` : "";
+
+    // Fetch one page of products (50 products at a time for speed)
+    const productsQuery = direction === "backward" ? `
+      query GetProducts($cursor: String, $query: String) {
+        products(last: 50, before: $cursor, query: $query) {
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
+          edges {
+            node {
+              id
+              title
+              status
+              variants(first: 100) {
+                edges {
+                  node {
+                    id
+                    sku
+                    title
+                    inventoryQuantity
+                    metafields(first: 10) {
+                      edges {
+                        node {
+                          id
+                          namespace
+                          key
+                          value
                         }
                       }
                     }
@@ -71,30 +74,47 @@ export async function loader({ request }) {
               }
             }
           }
-        `;
-
-        const response = await admin.graphql(productsQuery, {
-          variables: { cursor },
-        });
-        const data = await response.json();
-
-        if (data.errors) {
-          console.error("GraphQL errors:", data.errors);
-          throw new Error("Failed to fetch products: " + JSON.stringify(data.errors));
         }
-
-        if (!data.data || !data.data.products) {
-          console.error("Unexpected response structure:", data);
-          throw new Error("Unexpected response structure from Shopify");
-        }
-
-        allProducts = [...allProducts, ...data.data.products.edges];
-        hasNextPage = data.data.products.pageInfo.hasNextPage;
-        cursor = data.data.products.pageInfo.endCursor;
       }
-
-      return allProducts;
-    }
+    ` : `
+      query GetProducts($cursor: String, $query: String) {
+        products(first: 50, after: $cursor, query: $query) {
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
+          edges {
+            node {
+              id
+              title
+              status
+              variants(first: 100) {
+                edges {
+                  node {
+                    id
+                    sku
+                    title
+                    inventoryQuantity
+                    metafields(first: 10) {
+                      edges {
+                        node {
+                          id
+                          namespace
+                          key
+                          value
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
 
     // Fetch suppliers
     const suppliersQuery = `
@@ -114,20 +134,29 @@ export async function loader({ request }) {
       }
     `;
 
-    const [productEdges, suppliersResponse] = await Promise.all([
-      fetchAllProducts(),
+    const [productsResponse, suppliersResponse] = await Promise.all([
+      admin.graphql(productsQuery, {
+        variables: { cursor, query: queryFilter },
+      }),
       admin.graphql(suppliersQuery),
     ]);
 
+    const productsData = await productsResponse.json();
     const suppliersData = await suppliersResponse.json();
+
+    if (productsData.errors) {
+      console.error("Products GraphQL errors:", productsData.errors);
+      return { variants: [], suppliers: [], pageInfo: null };
+    }
 
     if (!suppliersData.data || !suppliersData.data.metaobjects) {
       console.error("Suppliers response error:", suppliersData);
-      throw new Error("Failed to fetch suppliers");
+      return { variants: [], suppliers: [], pageInfo: null };
     }
 
     // Transform data
     const variants = [];
+    const productEdges = productsData.data?.products?.edges || [];
     productEdges.forEach((productEdge) => {
       const product = productEdge.node;
       product.variants.edges.forEach((variantEdge) => {
@@ -145,17 +174,17 @@ export async function loader({ request }) {
     });
 
     const suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
+    const pageInfo = productsData.data?.products?.pageInfo || null;
 
-    return { variants, suppliers };
+    return { variants, suppliers, pageInfo, currentStatus: statusFilter };
   } catch (error) {
     console.error("Products loader error:", error);
-    // Return empty data rather than crashing
-    return { variants: [], suppliers: [] };
+    return { variants: [], suppliers: [], pageInfo: null, currentStatus: "ACTIVE" };
   }
 }
 
 export default function ProductsPage() {
-  const { variants, suppliers } = useLoaderData();
+  const { variants, suppliers, pageInfo, currentStatus } = useLoaderData();
   const revalidator = useRevalidator();
   const navigate = useNavigate();
 
@@ -181,33 +210,47 @@ export default function ProductsPage() {
   const [sortDirection, setSortDirection] = useState("ascending");
   const { mode, setMode } = useSetIndexFiltersMode(IndexFiltersMode.Filtering);
 
-  // Filter states
-  const [statusFilter, setStatusFilter] = useState(["ACTIVE"]); // Default to Active
+  // Filter states - sync with URL
+  const [statusFilter, setStatusFilter] = useState([currentStatus || "ACTIVE"]);
 
-  // Pagination state
-  const ITEMS_PER_PAGE = 50;
-  const [currentPage, setCurrentPage] = useState(1);
-
+  // Client-side search filter on current page
   const handleFiltersQueryChange = useCallback((value) => {
     setQueryValue(value);
-    setCurrentPage(1); // Reset to first page on search
   }, []);
 
+  // Server-side status filter - navigate to reload with new filter
   const handleStatusFilterChange = useCallback((value) => {
     setStatusFilter(value);
-    setCurrentPage(1);
-  }, []);
+    // Navigate to reload with new status filter (server-side)
+    const status = value.length > 0 ? value[0] : "ACTIVE";
+    navigate(`/app/products?status=${status}`);
+  }, [navigate]);
 
   const handleFiltersClearAll = useCallback(() => {
     setQueryValue("");
     setStatusFilter(["ACTIVE"]);
-    setCurrentPage(1);
-  }, []);
+    navigate("/app/products?status=ACTIVE");
+  }, [navigate]);
 
   const handleStatusFilterRemove = useCallback(() => {
     setStatusFilter(["ACTIVE"]);
-    setCurrentPage(1);
-  }, []);
+    navigate("/app/products?status=ACTIVE");
+  }, [navigate]);
+
+  // Server-side pagination handlers
+  const handleNextPage = useCallback(() => {
+    if (pageInfo?.hasNextPage && pageInfo?.endCursor) {
+      const status = statusFilter.length > 0 ? statusFilter[0] : "ACTIVE";
+      navigate(`/app/products?cursor=${pageInfo.endCursor}&direction=forward&status=${status}`);
+    }
+  }, [pageInfo, statusFilter, navigate]);
+
+  const handlePreviousPage = useCallback(() => {
+    if (pageInfo?.hasPreviousPage && pageInfo?.startCursor) {
+      const status = statusFilter.length > 0 ? statusFilter[0] : "ACTIVE";
+      navigate(`/app/products?cursor=${pageInfo.startCursor}&direction=backward&status=${status}`);
+    }
+  }, [pageInfo, statusFilter, navigate]);
 
   // Get supplier options for dropdown
   const supplierOptions = [
@@ -417,16 +460,11 @@ export default function ProductsPage() {
       : "Unknown";
   };
 
-  // Filter and sort variants
-  const filteredVariants = useMemo(() => {
+  // Filter and sort variants (client-side filtering on current page only)
+  const displayedVariants = useMemo(() => {
     let filtered = [...variants]; // Create a copy to avoid mutating original
 
-    // Apply status filter
-    if (statusFilter.length > 0) {
-      filtered = filtered.filter((v) => statusFilter.includes(v.productStatus));
-    }
-
-    // Apply search query
+    // Apply client-side search query (for quick filtering on current page)
     if (queryValue) {
       filtered = filtered.filter(
         (v) =>
@@ -435,14 +473,8 @@ export default function ProductsPage() {
       );
     }
 
-    // Sort - first by status (Active first), then by selected column
+    // Sort by selected column
     filtered.sort((a, b) => {
-      // Primary sort: Active status first
-      const statusOrder = { ACTIVE: 0, DRAFT: 1, ARCHIVED: 2 };
-      const statusCompare = (statusOrder[a.productStatus] || 99) - (statusOrder[b.productStatus] || 99);
-      if (statusCompare !== 0) return statusCompare;
-
-      // Secondary sort: by selected column
       let aVal, bVal;
 
       switch (sortColumn) {
@@ -467,7 +499,7 @@ export default function ProductsPage() {
         case "onHand":
           aVal = a.inventoryQuantity;
           bVal = b.inventoryQuantity;
-          break;
+          return sortDirection === "ascending" ? aVal - bVal : bVal - aVal;
         case "supplier":
           aVal = getSupplierName(a);
           bVal = getSupplierName(b);
@@ -477,19 +509,10 @@ export default function ProductsPage() {
         default:
           return 0;
       }
-
-      return sortDirection === "ascending" ? aVal - bVal : bVal - aVal;
     });
 
     return filtered;
-  }, [variants, queryValue, sortColumn, sortDirection, statusFilter]);
-
-  // Paginated variants
-  const totalPages = Math.ceil(filteredVariants.length / ITEMS_PER_PAGE);
-  const paginatedVariants = useMemo(() => {
-    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-    return filteredVariants.slice(startIndex, startIndex + ITEMS_PER_PAGE);
-  }, [filteredVariants, currentPage]);
+  }, [variants, queryValue, sortColumn, sortDirection]);
 
   // Filter definitions for IndexFilters
   const filters = [
@@ -550,7 +573,7 @@ export default function ProductsPage() {
           <Card padding="0">
             <IndexTable
               resourceName={{ singular: "variant", plural: "variants" }}
-              itemCount={filteredVariants.length}
+              itemCount={displayedVariants.length}
               headings={[
                 { title: "SKU" },
                 { title: "Product" },
@@ -583,7 +606,7 @@ export default function ProductsPage() {
                 }
               }}
             >
-              {paginatedVariants.map((variant, index) => (
+              {displayedVariants.map((variant, index) => (
                 <IndexTable.Row id={variant.id} key={variant.id} position={index}>
                   <IndexTable.Cell>
                     <Text variant="bodyMd" fontWeight="semibold" as="span">
@@ -609,17 +632,17 @@ export default function ProductsPage() {
             </IndexTable>
           </Card>
 
-          {/* Pagination */}
-          {totalPages > 1 && (
+          {/* Server-side Pagination */}
+          {pageInfo && (pageInfo.hasPreviousPage || pageInfo.hasNextPage) && (
             <InlineStack align="center" gap="400">
               <Text variant="bodySm" as="span" tone="subdued">
-                Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredVariants.length)} of {filteredVariants.length} variants
+                Showing {displayedVariants.length} variants on this page
               </Text>
               <Pagination
-                hasPrevious={currentPage > 1}
-                hasNext={currentPage < totalPages}
-                onPrevious={() => setCurrentPage(currentPage - 1)}
-                onNext={() => setCurrentPage(currentPage + 1)}
+                hasPrevious={pageInfo.hasPreviousPage}
+                hasNext={pageInfo.hasNextPage}
+                onPrevious={handlePreviousPage}
+                onNext={handleNextPage}
               />
             </InlineStack>
           )}

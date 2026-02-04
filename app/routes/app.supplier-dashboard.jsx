@@ -16,28 +16,30 @@ import AppNavigation from "../components/AppNavigation";
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
-  // Fetch all products with variants and inventory
-  const productsQuery = `
-    {
-      products(first: 250) {
-        edges {
-          node {
-            id
-            title
-            variants(first: 250) {
-              edges {
-                node {
-                  id
-                  sku
-                  title
-                  inventoryQuantity
-                  metafields(first: 10) {
-                    edges {
-                      node {
-                        id
-                        namespace
-                        key
-                        value
+  try {
+    // Fetch all products with variants and inventory
+    const productsQuery = `
+      {
+        products(first: 250) {
+          edges {
+            node {
+              id
+              title
+              variants(first: 250) {
+                edges {
+                  node {
+                    id
+                    sku
+                    title
+                    inventoryQuantity
+                    metafields(first: 10) {
+                      edges {
+                        node {
+                          id
+                          namespace
+                          key
+                          value
+                        }
                       }
                     }
                   }
@@ -47,55 +49,63 @@ export async function loader({ request }) {
           }
         }
       }
-    }
-  `;
+    `;
 
-  // Fetch all suppliers
-  const suppliersQuery = `
-    {
-      metaobjects(type: "supplier", first: 250) {
-        edges {
-          node {
-            id
-            handle
-            fields {
-              key
-              value
+    // Fetch all suppliers
+    const suppliersQuery = `
+      {
+        metaobjects(type: "supplier", first: 250) {
+          edges {
+            node {
+              id
+              handle
+              fields {
+                key
+                value
+              }
             }
           }
         }
       }
+    `;
+
+    const [productsResponse, suppliersResponse] = await Promise.all([
+      admin.graphql(productsQuery),
+      admin.graphql(suppliersQuery),
+    ]);
+
+    const productsData = await productsResponse.json();
+    const suppliersData = await suppliersResponse.json();
+
+    if (!productsData.data || !suppliersData.data) {
+      console.error("API Response error:", { productsData, suppliersData });
+      return { variants: [], suppliers: [] };
     }
-  `;
 
-  const [productsResponse, suppliersResponse] = await Promise.all([
-    admin.graphql(productsQuery),
-    admin.graphql(suppliersQuery),
-  ]);
-
-  const productsData = await productsResponse.json();
-  const suppliersData = await suppliersResponse.json();
-
-  // Transform data
-  const variants = [];
-  productsData.data.products.edges.forEach((productEdge) => {
-    const product = productEdge.node;
-    product.variants.edges.forEach((variantEdge) => {
-      const variant = variantEdge.node;
-      variants.push({
-        id: variant.id,
-        sku: variant.sku,
-        variantTitle: variant.title,
-        productTitle: product.title,
-        inventoryQuantity: variant.inventoryQuantity || 0,
-        metafields: variant.metafields.edges.map((m) => m.node),
+    // Transform data
+    const variants = [];
+    productsData.data.products.edges.forEach((productEdge) => {
+      const product = productEdge.node;
+      product.variants.edges.forEach((variantEdge) => {
+        const variant = variantEdge.node;
+        variants.push({
+          id: variant.id,
+          sku: variant.sku,
+          variantTitle: variant.title,
+          productTitle: product.title,
+          inventoryQuantity: variant.inventoryQuantity || 0,
+          metafields: variant.metafields.edges.map((m) => m.node),
+        });
       });
     });
-  });
 
-  const suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
+    const suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
 
-  return { variants, suppliers };
+    return { variants, suppliers };
+  } catch (error) {
+    console.error("Supplier dashboard loader error:", error);
+    return { variants: [], suppliers: [] };
+  }
 }
 
 // Helper function to get metafield value

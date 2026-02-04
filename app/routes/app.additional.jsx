@@ -19,31 +19,41 @@ import AppNavigation from "../components/AppNavigation";
 export async function loader({ request }) {
   const { admin, session } = await authenticate.admin(request);
 
-  console.log("Current scopes:", session.scope);
+  try {
+    console.log("Current scopes:", session.scope);
 
-  const query = `
-    {
-      metaobjects(type: "supplier", first: 250) {
-        edges {
-          node {
-            id
-            handle
-            fields {
-              key
-              value
+    const query = `
+      {
+        metaobjects(type: "supplier", first: 250) {
+          edges {
+            node {
+              id
+              handle
+              fields {
+                key
+                value
+              }
             }
           }
         }
       }
+    `;
+
+    const response = await admin.graphql(query);
+    const data = await response.json();
+
+    if (!data.data || !data.data.metaobjects) {
+      console.error("Suppliers API error:", data);
+      return { suppliers: [] };
     }
-  `;
 
-  const response = await admin.graphql(query);
-  const data = await response.json();
-
-  return {
-    suppliers: data.data.metaobjects.edges.map(e => e.node),
-  };
+    return {
+      suppliers: data.data.metaobjects.edges.map(e => e.node),
+    };
+  } catch (error) {
+    console.error("Additional page loader error:", error);
+    return { suppliers: [] };
+  }
 }
 
 const US_STATES = [

@@ -20,39 +20,41 @@ import AppNavigation from "../components/AppNavigation";
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
-  // Helper function to fetch all products with pagination
-  async function fetchAllProducts() {
-    let allProducts = [];
-    let hasNextPage = true;
-    let cursor = null;
+  try {
+    // Helper function to fetch all products with pagination
+    async function fetchAllProducts() {
+      let allProducts = [];
+      let hasNextPage = true;
+      let cursor = null;
 
-    while (hasNextPage) {
-      const productsQuery = `
-        query GetProducts($cursor: String) {
-          products(first: 250, after: $cursor) {
-            pageInfo {
-              hasNextPage
-              endCursor
-            }
-            edges {
-              node {
-                id
-                title
-                status
-                variants(first: 250) {
-                  edges {
-                    node {
-                      id
-                      sku
-                      title
-                      inventoryQuantity
-                      metafields(first: 10) {
-                        edges {
-                          node {
-                            id
-                            namespace
-                            key
-                            value
+      while (hasNextPage) {
+        const productsQuery = `
+          query GetProducts($cursor: String) {
+            products(first: 250, after: $cursor) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              edges {
+                node {
+                  id
+                  title
+                  status
+                  variants(first: 250) {
+                    edges {
+                      node {
+                        id
+                        sku
+                        title
+                        inventoryQuantity
+                        metafields(first: 10) {
+                          edges {
+                            node {
+                              id
+                              namespace
+                              key
+                              value
+                            }
                           }
                         }
                       }
@@ -62,70 +64,88 @@ export async function loader({ request }) {
               }
             }
           }
+        `;
+
+        const response = await admin.graphql(productsQuery, {
+          variables: { cursor },
+        });
+        const data = await response.json();
+
+        if (data.errors) {
+          console.error("GraphQL errors:", data.errors);
+          break;
         }
-      `;
 
-      const response = await admin.graphql(productsQuery, {
-        variables: { cursor },
-      });
-      const data = await response.json();
+        if (!data.data || !data.data.products) {
+          console.error("Unexpected response:", data);
+          break;
+        }
 
-      allProducts = [...allProducts, ...data.data.products.edges];
-      hasNextPage = data.data.products.pageInfo.hasNextPage;
-      cursor = data.data.products.pageInfo.endCursor;
+        allProducts = [...allProducts, ...data.data.products.edges];
+        hasNextPage = data.data.products.pageInfo.hasNextPage;
+        cursor = data.data.products.pageInfo.endCursor;
+      }
+
+      return allProducts;
     }
 
-    return allProducts;
-  }
-
-  // Fetch all suppliers
-  const suppliersQuery = `
-    {
-      metaobjects(type: "supplier", first: 250) {
-        edges {
-          node {
-            id
-            handle
-            fields {
-              key
-              value
+    // Fetch all suppliers
+    const suppliersQuery = `
+      {
+        metaobjects(type: "supplier", first: 250) {
+          edges {
+            node {
+              id
+              handle
+              fields {
+                key
+                value
+              }
             }
           }
         }
       }
+    `;
+
+    const [productEdges, suppliersResponse] = await Promise.all([
+      fetchAllProducts(),
+      admin.graphql(suppliersQuery),
+    ]);
+
+    const suppliersData = await suppliersResponse.json();
+
+    if (!suppliersData.data || !suppliersData.data.metaobjects) {
+      console.error("Suppliers response error:", suppliersData);
+      return { variants: [], suppliers: [] };
     }
-  `;
 
-  const [productEdges, suppliersResponse] = await Promise.all([
-    fetchAllProducts(),
-    admin.graphql(suppliersQuery),
-  ]);
-
-  const suppliersData = await suppliersResponse.json();
-
-  // Transform data for easier use - only include ACTIVE products
-  const variants = [];
-  productEdges.forEach((productEdge) => {
-    const product = productEdge.node;
-    // Only include active products in the report
-    if (product.status === "ACTIVE") {
-      product.variants.edges.forEach((variantEdge) => {
-        const variant = variantEdge.node;
-        variants.push({
-          id: variant.id,
-          sku: variant.sku,
-          variantTitle: variant.title,
-          productTitle: product.title,
-          inventoryQuantity: variant.inventoryQuantity || 0,
-          metafields: variant.metafields.edges.map((m) => m.node),
+    // Transform data for easier use - only include ACTIVE products
+    const variants = [];
+    productEdges.forEach((productEdge) => {
+      const product = productEdge.node;
+      // Only include active products in the report
+      if (product.status === "ACTIVE") {
+        product.variants.edges.forEach((variantEdge) => {
+          const variant = variantEdge.node;
+          variants.push({
+            id: variant.id,
+            sku: variant.sku,
+            variantTitle: variant.title,
+            productTitle: product.title,
+            inventoryQuantity: variant.inventoryQuantity || 0,
+            metafields: variant.metafields.edges.map((m) => m.node),
+          });
         });
-      });
-    }
-  });
+      }
+    });
 
-  const suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
+    const suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
 
-  return { variants, suppliers };
+    return { variants, suppliers };
+  } catch (error) {
+    console.error("Report loader error:", error);
+    return { variants: [], suppliers: [] };
+  }
 }
 
 // Helper function to get metafield value
