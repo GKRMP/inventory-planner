@@ -16,6 +16,9 @@ import {
   InlineStack,
   Checkbox,
   Divider,
+  ChoiceList,
+  Pagination,
+  Badge,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
@@ -24,34 +27,80 @@ import AppNavigation from "../components/AppNavigation";
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
-  // Fetch products with variants
-  const productsQuery = `
-    {
-      products(first: 250) {
-        edges {
-          node {
-            id
-            title
-            variants(first: 250) {
-              edges {
-                node {
-                  id
-                  sku
-                  title
-                  inventoryQuantity
-                  metafields(first: 10) {
-                    edges {
-                      node {
-                        id
-                        namespace
-                        key
-                        value
+  // Helper function to fetch all products with pagination
+  async function fetchAllProducts() {
+    let allProducts = [];
+    let hasNextPage = true;
+    let cursor = null;
+
+    while (hasNextPage) {
+      const productsQuery = `
+        query GetProducts($cursor: String) {
+          products(first: 250, after: $cursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            edges {
+              node {
+                id
+                title
+                status
+                publishedOnCurrentPublication
+                resourcePublicationOnCurrentPublication {
+                  publication {
+                    id
+                    name
+                  }
+                  isPublished
+                }
+                variants(first: 250) {
+                  edges {
+                    node {
+                      id
+                      sku
+                      title
+                      inventoryQuantity
+                      metafields(first: 10) {
+                        edges {
+                          node {
+                            id
+                            namespace
+                            key
+                            value
+                          }
+                        }
                       }
                     }
                   }
                 }
               }
             }
+          }
+        }
+      `;
+
+      const response = await admin.graphql(productsQuery, {
+        variables: { cursor },
+      });
+      const data = await response.json();
+
+      allProducts = [...allProducts, ...data.data.products.edges];
+      hasNextPage = data.data.products.pageInfo.hasNextPage;
+      cursor = data.data.products.pageInfo.endCursor;
+    }
+
+    return allProducts;
+  }
+
+  // Fetch all publications/channels
+  const publicationsQuery = `
+    {
+      publications(first: 50) {
+        edges {
+          node {
+            id
+            name
           }
         }
       }
@@ -76,17 +125,18 @@ export async function loader({ request }) {
     }
   `;
 
-  const [productsResponse, suppliersResponse] = await Promise.all([
-    admin.graphql(productsQuery),
+  const [productEdges, publicationsResponse, suppliersResponse] = await Promise.all([
+    fetchAllProducts(),
+    admin.graphql(publicationsQuery),
     admin.graphql(suppliersQuery),
   ]);
 
-  const productsData = await productsResponse.json();
+  const publicationsData = await publicationsResponse.json();
   const suppliersData = await suppliersResponse.json();
 
   // Transform data
   const variants = [];
-  productsData.data.products.edges.forEach((productEdge) => {
+  productEdges.forEach((productEdge) => {
     const product = productEdge.node;
     product.variants.edges.forEach((variantEdge) => {
       const variant = variantEdge.node;
@@ -95,6 +145,8 @@ export async function loader({ request }) {
         sku: variant.sku,
         variantTitle: variant.title,
         productTitle: product.title,
+        productStatus: product.status,
+        publishedOnCurrentPublication: product.publishedOnCurrentPublication,
         inventoryQuantity: variant.inventoryQuantity || 0,
         metafields: variant.metafields.edges.map((m) => m.node),
       });
@@ -102,12 +154,13 @@ export async function loader({ request }) {
   });
 
   const suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
+  const publications = publicationsData.data.publications.edges.map((e) => e.node);
 
-  return { variants, suppliers };
+  return { variants, suppliers, publications };
 }
 
 export default function ProductsPage() {
-  const { variants, suppliers } = useLoaderData();
+  const { variants, suppliers, publications } = useLoaderData();
   const revalidator = useRevalidator();
   const navigate = useNavigate();
 
@@ -133,12 +186,44 @@ export default function ProductsPage() {
   const [sortDirection, setSortDirection] = useState("ascending");
   const { mode, setMode } = useSetIndexFiltersMode(IndexFiltersMode.Filtering);
 
+  // Filter states
+  const [statusFilter, setStatusFilter] = useState(["ACTIVE"]); // Default to Active
+  const [channelFilter, setChannelFilter] = useState([]);
+
+  // Pagination state
+  const ITEMS_PER_PAGE = 50;
+  const [currentPage, setCurrentPage] = useState(1);
+
   const handleFiltersQueryChange = useCallback((value) => {
     setQueryValue(value);
+    setCurrentPage(1); // Reset to first page on search
+  }, []);
+
+  const handleStatusFilterChange = useCallback((value) => {
+    setStatusFilter(value);
+    setCurrentPage(1);
+  }, []);
+
+  const handleChannelFilterChange = useCallback((value) => {
+    setChannelFilter(value);
+    setCurrentPage(1);
   }, []);
 
   const handleFiltersClearAll = useCallback(() => {
     setQueryValue("");
+    setStatusFilter(["ACTIVE"]);
+    setChannelFilter([]);
+    setCurrentPage(1);
+  }, []);
+
+  const handleStatusFilterRemove = useCallback(() => {
+    setStatusFilter(["ACTIVE"]);
+    setCurrentPage(1);
+  }, []);
+
+  const handleChannelFilterRemove = useCallback(() => {
+    setChannelFilter([]);
+    setCurrentPage(1);
   }, []);
 
   // Get supplier options for dropdown
@@ -351,16 +436,39 @@ export default function ProductsPage() {
 
   // Filter and sort variants
   const filteredVariants = useMemo(() => {
-    let filtered = queryValue
-      ? variants.filter(
-          (v) =>
-            v.sku?.toLowerCase().includes(queryValue.toLowerCase()) ||
-            v.productTitle?.toLowerCase().includes(queryValue.toLowerCase())
-        )
-      : variants;
+    let filtered = variants;
 
-    // Sort
+    // Apply status filter
+    if (statusFilter.length > 0) {
+      filtered = filtered.filter((v) => statusFilter.includes(v.productStatus));
+    }
+
+    // Apply channel filter (published on current publication)
+    if (channelFilter.length > 0) {
+      if (channelFilter.includes("published")) {
+        filtered = filtered.filter((v) => v.publishedOnCurrentPublication);
+      } else if (channelFilter.includes("unpublished")) {
+        filtered = filtered.filter((v) => !v.publishedOnCurrentPublication);
+      }
+    }
+
+    // Apply search query
+    if (queryValue) {
+      filtered = filtered.filter(
+        (v) =>
+          v.sku?.toLowerCase().includes(queryValue.toLowerCase()) ||
+          v.productTitle?.toLowerCase().includes(queryValue.toLowerCase())
+      );
+    }
+
+    // Sort - first by status (Active first), then by selected column
     filtered.sort((a, b) => {
+      // Primary sort: Active status first
+      const statusOrder = { ACTIVE: 0, DRAFT: 1, ARCHIVED: 2 };
+      const statusCompare = (statusOrder[a.productStatus] || 99) - (statusOrder[b.productStatus] || 99);
+      if (statusCompare !== 0) return statusCompare;
+
+      // Secondary sort: by selected column
       let aVal, bVal;
 
       switch (sortColumn) {
@@ -400,7 +508,71 @@ export default function ProductsPage() {
     });
 
     return filtered;
-  }, [variants, queryValue, sortColumn, sortDirection]);
+  }, [variants, queryValue, sortColumn, sortDirection, statusFilter, channelFilter]);
+
+  // Paginated variants
+  const totalPages = Math.ceil(filteredVariants.length / ITEMS_PER_PAGE);
+  const paginatedVariants = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    return filteredVariants.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [filteredVariants, currentPage]);
+
+  // Filter definitions for IndexFilters
+  const filters = [
+    {
+      key: "status",
+      label: "Status",
+      filter: (
+        <ChoiceList
+          title="Product Status"
+          titleHidden
+          choices={[
+            { label: "Active", value: "ACTIVE" },
+            { label: "Draft", value: "DRAFT" },
+            { label: "Archived", value: "ARCHIVED" },
+          ]}
+          selected={statusFilter}
+          onChange={handleStatusFilterChange}
+          allowMultiple
+        />
+      ),
+      shortcut: true,
+    },
+    {
+      key: "channel",
+      label: "Sales Channel",
+      filter: (
+        <ChoiceList
+          title="Sales Channel"
+          titleHidden
+          choices={[
+            { label: "Published", value: "published" },
+            { label: "Unpublished", value: "unpublished" },
+          ]}
+          selected={channelFilter}
+          onChange={handleChannelFilterChange}
+        />
+      ),
+      shortcut: true,
+    },
+  ];
+
+  // Applied filters for display
+  const appliedFilters = [];
+  if (statusFilter.length > 0 && !(statusFilter.length === 1 && statusFilter[0] === "ACTIVE")) {
+    appliedFilters.push({
+      key: "status",
+      label: `Status: ${statusFilter.join(", ")}`,
+      onRemove: handleStatusFilterRemove,
+    });
+  }
+  if (channelFilter.length > 0) {
+    appliedFilters.push({
+      key: "channel",
+      label: `Channel: ${channelFilter.join(", ")}`,
+      onRemove: handleChannelFilterRemove,
+    });
+  }
 
   return (
     <>
@@ -412,9 +584,12 @@ export default function ProductsPage() {
             queryValue={queryValue}
             queryPlaceholder="Search by SKU or Product..."
             onQueryChange={handleFiltersQueryChange}
-            onQueryClear={() => setQueryValue("")}
-            filters={[]}
-            appliedFilters={[]}
+            onQueryClear={() => {
+              setQueryValue("");
+              setCurrentPage(1);
+            }}
+            filters={filters}
+            appliedFilters={appliedFilters}
             onClearAll={handleFiltersClearAll}
             mode={mode}
             setMode={setMode}
@@ -423,59 +598,81 @@ export default function ProductsPage() {
             canCreateNewView={false}
           />
           <Card padding="0">
-        <IndexTable
-          resourceName={{ singular: "variant", plural: "variants" }}
-          itemCount={filteredVariants.length}
-          headings={[
-            { title: "SKU" },
-            { title: "Product" },
-            { title: "Variant" },
-            { title: "On Hand" },
-            { title: "Supplier" },
-            { title: "Actions" },
-          ]}
-          selectable={false}
-          loading={revalidator.state === "loading"}
-          sortable={[true, true, true, true, true, false]}
-          sortDirection={sortDirection}
-          sortColumnIndex={
-            sortColumn === "sku" ? 0 :
-            sortColumn === "product" ? 1 :
-            sortColumn === "variant" ? 2 :
-            sortColumn === "onHand" ? 3 :
-            sortColumn === "supplier" ? 4 : undefined
-          }
-          onSort={(index) => {
-            const columns = ["sku", "product", "variant", "onHand", "supplier"];
-            const newColumn = columns[index];
-            if (newColumn === sortColumn) {
-              setSortDirection(sortDirection === "ascending" ? "descending" : "ascending");
-            } else {
-              setSortColumn(newColumn);
-              setSortDirection("ascending");
-            }
-          }}
-        >
-          {filteredVariants.map((variant, index) => (
-            <IndexTable.Row id={variant.id} key={variant.id} position={index}>
-              <IndexTable.Cell>
-                <Text variant="bodyMd" fontWeight="semibold" as="span">
-                  {variant.sku || "N/A"}
-                </Text>
-              </IndexTable.Cell>
-              <IndexTable.Cell>{variant.productTitle}</IndexTable.Cell>
-              <IndexTable.Cell>{variant.variantTitle}</IndexTable.Cell>
-              <IndexTable.Cell>{variant.inventoryQuantity}</IndexTable.Cell>
-              <IndexTable.Cell>{getSupplierName(variant)}</IndexTable.Cell>
-              <IndexTable.Cell>
-                <Button size="slim" onClick={() => openEdit(variant)}>
-                  Edit Supplier
-                </Button>
-              </IndexTable.Cell>
-            </IndexTable.Row>
-          ))}
-        </IndexTable>
+            <IndexTable
+              resourceName={{ singular: "variant", plural: "variants" }}
+              itemCount={filteredVariants.length}
+              headings={[
+                { title: "SKU" },
+                { title: "Product" },
+                { title: "Variant" },
+                { title: "Status" },
+                { title: "On Hand" },
+                { title: "Supplier" },
+                { title: "Actions" },
+              ]}
+              selectable={false}
+              loading={revalidator.state === "loading"}
+              sortable={[true, true, true, false, true, true, false]}
+              sortDirection={sortDirection}
+              sortColumnIndex={
+                sortColumn === "sku" ? 0 :
+                sortColumn === "product" ? 1 :
+                sortColumn === "variant" ? 2 :
+                sortColumn === "onHand" ? 4 :
+                sortColumn === "supplier" ? 5 : undefined
+              }
+              onSort={(index) => {
+                const columns = ["sku", "product", "variant", null, "onHand", "supplier"];
+                const newColumn = columns[index];
+                if (!newColumn) return;
+                if (newColumn === sortColumn) {
+                  setSortDirection(sortDirection === "ascending" ? "descending" : "ascending");
+                } else {
+                  setSortColumn(newColumn);
+                  setSortDirection("ascending");
+                }
+              }}
+            >
+              {paginatedVariants.map((variant, index) => (
+                <IndexTable.Row id={variant.id} key={variant.id} position={index}>
+                  <IndexTable.Cell>
+                    <Text variant="bodyMd" fontWeight="semibold" as="span">
+                      {variant.sku || "N/A"}
+                    </Text>
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>{variant.productTitle}</IndexTable.Cell>
+                  <IndexTable.Cell>{variant.variantTitle}</IndexTable.Cell>
+                  <IndexTable.Cell>
+                    <Badge tone={variant.productStatus === "ACTIVE" ? "success" : variant.productStatus === "DRAFT" ? "warning" : "default"}>
+                      {variant.productStatus}
+                    </Badge>
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>{variant.inventoryQuantity}</IndexTable.Cell>
+                  <IndexTable.Cell>{getSupplierName(variant)}</IndexTable.Cell>
+                  <IndexTable.Cell>
+                    <Button size="slim" onClick={() => openEdit(variant)}>
+                      Edit Supplier
+                    </Button>
+                  </IndexTable.Cell>
+                </IndexTable.Row>
+              ))}
+            </IndexTable>
           </Card>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <InlineStack align="center" gap="400">
+              <Text variant="bodySm" as="span" tone="subdued">
+                Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredVariants.length)} of {filteredVariants.length} variants
+              </Text>
+              <Pagination
+                hasPrevious={currentPage > 1}
+                hasNext={currentPage < totalPages}
+                onPrevious={() => setCurrentPage(currentPage - 1)}
+                onNext={() => setCurrentPage(currentPage + 1)}
+              />
+            </InlineStack>
+          )}
         </BlockStack>
 
         <Modal
@@ -575,20 +772,25 @@ export default function ProductsPage() {
               <BlockStack gap="400">
                 <Text variant="headingMd" as="h3">Supplier</Text>
 
-                <Select
-                  label="Supplier"
-                  options={supplierOptions}
-                  value={form.supplier_id}
-                  onChange={(v) => setForm({ ...form, supplier_id: v })}
-                  required
-                />
-
-                <TextField
-                  label="MPN (Manufacturer Part Number)"
-                  value={form.mpn}
-                  onChange={(v) => setForm({ ...form, mpn: v })}
-                  placeholder="Supplier's part number for this product"
-                />
+                <InlineStack gap="400">
+                  <div style={{ flex: 1 }}>
+                    <Select
+                      label="Supplier"
+                      options={supplierOptions}
+                      value={form.supplier_id}
+                      onChange={(v) => setForm({ ...form, supplier_id: v })}
+                      required
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="MPN (Manufacturer Part Number)"
+                      value={form.mpn}
+                      onChange={(v) => setForm({ ...form, mpn: v })}
+                      placeholder="Supplier's part number"
+                    />
+                  </div>
+                </InlineStack>
 
                 <InlineStack gap="400">
                   <div style={{ flex: 1 }}>

@@ -16,7 +16,7 @@
  * Default CSV: tools/variant-supplier-import.csv
  *
  * CSV Format:
- *   SKU,SupplierID,IsPrimary,LeadTime,Threshold,DailyDemand,LastOrderDate,LastOrderCPU,LastOrderQty,Notes
+ *   SKU,SupplierID,MPN,IsPrimary,LeadTime,Threshold,DailyDemand,LastOrderDate,LastOrderCPU,LastOrderQty,Notes
  *
  * Notes:
  *   - SKU must match a variant SKU in your Shopify store
@@ -134,6 +134,7 @@ function groupBySKU(rows) {
 
     grouped[sku].push({
       supplier_id: row['SupplierID'],
+      mpn: row['MPN'] || '',
       is_primary: parseBool(row['IsPrimary']),
       lead_time: parseInt(row['LeadTime']) || 0,
       threshold: parseInt(row['Threshold']) || 0,

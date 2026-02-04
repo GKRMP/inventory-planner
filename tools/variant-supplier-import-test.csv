@@ -1,0 +1,2 @@
+﻿SKU,SupplierID,MPN,IsPrimary,LeadTime,Threshold,DailyDemand,LastOrderDate,LastOrderCPU,LastOrderQty,Notes
+T99B,1002,T99B,,7,,0.018163369,45901,150,5,Look up Cost - $150?

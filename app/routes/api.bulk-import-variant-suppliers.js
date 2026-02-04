@@ -13,6 +13,7 @@ import { authenticate } from "../shopify.server";
  *       {
  *         "sku": "ABC-001",
  *         "supplier_id": "1001",
+ *         "mpn": "MFG-12345",
  *         "is_primary": true,
  *         "lead_time": 14,
  *         "threshold": 10,
@@ -28,6 +29,7 @@ import { authenticate } from "../shopify.server";
  * Notes:
  *   - Multiple entries with the same SKU will be grouped together
  *   - Each SKU can have multiple suppliers
+ *   - MPN (Manufacturer Part Number) is the supplier's part number for the product
  */
 
 export async function action({ request }) {
@@ -58,6 +60,7 @@ export async function action({ request }) {
 
       groupedBySKU[sku].push({
         supplier_id: item.supplier_id || "",
+        mpn: item.mpn || "",
         is_primary: item.is_primary === true || item.is_primary === "true" || item.is_primary === "Y" || item.is_primary === "y",
         lead_time: parseInt(item.lead_time) || 0,
         threshold: parseInt(item.threshold) || 0,
