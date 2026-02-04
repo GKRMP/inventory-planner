@@ -28,11 +28,13 @@ export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
   try {
-    // Get URL params for pagination
+    // Get URL params for pagination and filters
     const url = new URL(request.url);
     const cursor = url.searchParams.get("cursor");
     const direction = url.searchParams.get("direction") || "forward";
     const statusFilter = url.searchParams.get("status") || "ACTIVE";
+    const channelsParam = url.searchParams.get("channels") || "online,pos";
+    const selectedChannels = channelsParam.split(",").filter(Boolean);
 
     // Build query filter
     const queryFilter = statusFilter ? `status:${statusFilter}` : "";
@@ -52,6 +54,17 @@ export async function loader({ request }) {
               id
               title
               status
+              resourcePublications(first: 10) {
+                nodes {
+                  isPublished
+                  publication {
+                    id
+                    catalog {
+                      title
+                    }
+                  }
+                }
+              }
               variants(first: 100) {
                 edges {
                   node {
@@ -90,6 +103,17 @@ export async function loader({ request }) {
               id
               title
               status
+              resourcePublications(first: 10) {
+                nodes {
+                  isPublished
+                  publication {
+                    id
+                    catalog {
+                      title
+                    }
+                  }
+                }
+              }
               variants(first: 100) {
                 edges {
                   node {
@@ -146,45 +170,67 @@ export async function loader({ request }) {
 
     if (productsData.errors) {
       console.error("Products GraphQL errors:", productsData.errors);
-      return { variants: [], suppliers: [], pageInfo: null };
+      return { variants: [], suppliers: [], pageInfo: null, currentStatus: statusFilter, currentChannels: selectedChannels };
     }
 
     if (!suppliersData.data || !suppliersData.data.metaobjects) {
       console.error("Suppliers response error:", suppliersData);
-      return { variants: [], suppliers: [], pageInfo: null };
+      return { variants: [], suppliers: [], pageInfo: null, currentStatus: statusFilter, currentChannels: selectedChannels };
     }
 
-    // Transform data
+    // Helper function to check if product is published to selected channels
+    const isPublishedToSelectedChannels = (product) => {
+      if (selectedChannels.length === 0) return true;
+
+      const publishedChannels = product.resourcePublications?.nodes || [];
+      return publishedChannels.some((rp) => {
+        if (!rp.isPublished) return false;
+        const pubTitle = rp.publication?.catalog?.title?.toLowerCase() || "";
+
+        return selectedChannels.some((ch) => {
+          if (ch === "online" && pubTitle.includes("online store")) return true;
+          if (ch === "pos" && (pubTitle.includes("point of sale") || pubTitle.includes("pos"))) return true;
+          if (ch === "shop" && pubTitle.includes("shop") && !pubTitle.includes("online")) return true;
+          return false;
+        });
+      });
+    };
+
+    // Transform data, filtering by selected channels
     const variants = [];
     const productEdges = productsData.data?.products?.edges || [];
     productEdges.forEach((productEdge) => {
       const product = productEdge.node;
-      product.variants.edges.forEach((variantEdge) => {
-        const variant = variantEdge.node;
-        variants.push({
-          id: variant.id,
-          sku: variant.sku,
-          variantTitle: variant.title,
-          productTitle: product.title,
-          productStatus: product.status || "ACTIVE",
-          inventoryQuantity: variant.inventoryQuantity || 0,
-          metafields: variant.metafields.edges.map((m) => m.node),
+
+      // Only include products published to selected channels
+      if (isPublishedToSelectedChannels(product)) {
+        product.variants.edges.forEach((variantEdge) => {
+          const variant = variantEdge.node;
+          variants.push({
+            id: variant.id,
+            sku: variant.sku,
+            variantTitle: variant.title,
+            productTitle: product.title,
+            productStatus: product.status || "ACTIVE",
+            inventoryQuantity: variant.inventoryQuantity || 0,
+            metafields: variant.metafields.edges.map((m) => m.node),
+          });
         });
-      });
+      }
     });
 
     const suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
     const pageInfo = productsData.data?.products?.pageInfo || null;
 
-    return { variants, suppliers, pageInfo, currentStatus: statusFilter };
+    return { variants, suppliers, pageInfo, currentStatus: statusFilter, currentChannels: selectedChannels };
   } catch (error) {
     console.error("Products loader error:", error);
-    return { variants: [], suppliers: [], pageInfo: null, currentStatus: "ACTIVE" };
+    return { variants: [], suppliers: [], pageInfo: null, currentStatus: "ACTIVE", currentChannels: ["online", "pos"] };
   }
 }
 
 export default function ProductsPage() {
-  const { variants, suppliers, pageInfo, currentStatus } = useLoaderData();
+  const { variants, suppliers, pageInfo, currentStatus, currentChannels } = useLoaderData();
   const revalidator = useRevalidator();
   const navigate = useNavigate();
 
@@ -212,6 +258,14 @@ export default function ProductsPage() {
 
   // Filter states - sync with URL
   const [statusFilter, setStatusFilter] = useState([currentStatus || "ACTIVE"]);
+  const [channelFilter, setChannelFilter] = useState(currentChannels || ["online", "pos"]);
+
+  // Build URL with all current filters
+  const buildFilterUrl = useCallback((overrides = {}) => {
+    const status = overrides.status !== undefined ? overrides.status : (statusFilter.length > 0 ? statusFilter[0] : "ACTIVE");
+    const channels = overrides.channels !== undefined ? overrides.channels : channelFilter.join(",");
+    return `/app/products?status=${status}&channels=${channels}`;
+  }, [statusFilter, channelFilter]);
 
   // Client-side search filter on current page
   const handleFiltersQueryChange = useCallback((value) => {
@@ -221,36 +275,49 @@ export default function ProductsPage() {
   // Server-side status filter - navigate to reload with new filter
   const handleStatusFilterChange = useCallback((value) => {
     setStatusFilter(value);
-    // Navigate to reload with new status filter (server-side)
     const status = value.length > 0 ? value[0] : "ACTIVE";
-    navigate(`/app/products?status=${status}`);
-  }, [navigate]);
+    navigate(buildFilterUrl({ status }));
+  }, [navigate, buildFilterUrl]);
+
+  // Server-side channel filter
+  const handleChannelFilterChange = useCallback((value) => {
+    setChannelFilter(value);
+    navigate(buildFilterUrl({ channels: value.join(",") }));
+  }, [navigate, buildFilterUrl]);
 
   const handleFiltersClearAll = useCallback(() => {
     setQueryValue("");
     setStatusFilter(["ACTIVE"]);
-    navigate("/app/products?status=ACTIVE");
+    setChannelFilter(["online", "pos"]);
+    navigate("/app/products?status=ACTIVE&channels=online,pos");
   }, [navigate]);
 
   const handleStatusFilterRemove = useCallback(() => {
     setStatusFilter(["ACTIVE"]);
-    navigate("/app/products?status=ACTIVE");
-  }, [navigate]);
+    navigate(buildFilterUrl({ status: "ACTIVE" }));
+  }, [navigate, buildFilterUrl]);
+
+  const handleChannelFilterRemove = useCallback(() => {
+    setChannelFilter(["online", "pos"]);
+    navigate(buildFilterUrl({ channels: "online,pos" }));
+  }, [navigate, buildFilterUrl]);
 
   // Server-side pagination handlers
   const handleNextPage = useCallback(() => {
     if (pageInfo?.hasNextPage && pageInfo?.endCursor) {
       const status = statusFilter.length > 0 ? statusFilter[0] : "ACTIVE";
-      navigate(`/app/products?cursor=${pageInfo.endCursor}&direction=forward&status=${status}`);
+      const channels = channelFilter.join(",");
+      navigate(`/app/products?cursor=${pageInfo.endCursor}&direction=forward&status=${status}&channels=${channels}`);
     }
-  }, [pageInfo, statusFilter, navigate]);
+  }, [pageInfo, statusFilter, channelFilter, navigate]);
 
   const handlePreviousPage = useCallback(() => {
     if (pageInfo?.hasPreviousPage && pageInfo?.startCursor) {
       const status = statusFilter.length > 0 ? statusFilter[0] : "ACTIVE";
-      navigate(`/app/products?cursor=${pageInfo.startCursor}&direction=backward&status=${status}`);
+      const channels = channelFilter.join(",");
+      navigate(`/app/products?cursor=${pageInfo.startCursor}&direction=backward&status=${status}&channels=${channels}`);
     }
-  }, [pageInfo, statusFilter, navigate]);
+  }, [pageInfo, statusFilter, channelFilter, navigate]);
 
   // Get supplier options for dropdown
   const supplierOptions = [
@@ -530,6 +597,24 @@ export default function ProductsPage() {
           ]}
           selected={statusFilter}
           onChange={handleStatusFilterChange}
+        />
+      ),
+      shortcut: true,
+    },
+    {
+      key: "channels",
+      label: "Channels",
+      filter: (
+        <ChoiceList
+          title="Sales Channels"
+          titleHidden
+          choices={[
+            { label: "Online Store", value: "online" },
+            { label: "Point of Sale", value: "pos" },
+            { label: "Shop App", value: "shop" },
+          ]}
+          selected={channelFilter}
+          onChange={handleChannelFilterChange}
           allowMultiple
         />
       ),
@@ -546,6 +631,14 @@ export default function ProductsPage() {
       onRemove: handleStatusFilterRemove,
     });
   }
+  if (channelFilter.length > 0 && !(channelFilter.length === 2 && channelFilter.includes("online") && channelFilter.includes("pos"))) {
+    const channelLabels = { online: "Online Store", pos: "Point of Sale", shop: "Shop App" };
+    appliedFilters.push({
+      key: "channels",
+      label: `Channels: ${channelFilter.map(c => channelLabels[c] || c).join(", ")}`,
+      onRemove: handleChannelFilterRemove,
+    });
+  }
 
   return (
     <>
@@ -559,7 +652,6 @@ export default function ProductsPage() {
             onQueryChange={handleFiltersQueryChange}
             onQueryClear={() => {
               setQueryValue("");
-              setCurrentPage(1);
             }}
             filters={filters}
             appliedFilters={appliedFilters}

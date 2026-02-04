@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useLoaderData, useNavigate } from "react-router";
+import { useMemo, useState, useCallback } from "react";
+import { useLoaderData, useNavigate, useFetcher } from "react-router";
 import {
   Page,
   Card,
@@ -8,7 +8,9 @@ import {
   BlockStack,
   InlineStack,
   Badge,
-  Spinner,
+  Button,
+  Banner,
+  ProgressBar,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
@@ -17,7 +19,7 @@ import AppNavigation from "../components/AppNavigation";
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
-  // Fetch all suppliers first - this is quick and critical
+  // Fetch all suppliers - this is quick
   let suppliers = [];
   try {
     const suppliersQuery = `
@@ -42,20 +44,90 @@ export async function loader({ request }) {
 
     if (suppliersData.data && suppliersData.data.metaobjects) {
       suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
-    } else {
-      console.error("Suppliers response error:", suppliersData);
     }
   } catch (error) {
     console.error("Error fetching suppliers:", error);
   }
 
-  // Helper function to fetch all products with pagination
-  async function fetchAllProducts() {
-    let allProducts = [];
+  // Only fetch first page of products for quick initial stats
+  let variants = [];
+  let hasMoreProducts = false;
+  try {
+    const productsQuery = `
+      query GetProducts {
+        products(first: 50) {
+          pageInfo {
+            hasNextPage
+          }
+          edges {
+            node {
+              id
+              title
+              variants(first: 100) {
+                edges {
+                  node {
+                    id
+                    sku
+                    title
+                    inventoryQuantity
+                    metafields(first: 10) {
+                      edges {
+                        node {
+                          id
+                          namespace
+                          key
+                          value
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const response = await admin.graphql(productsQuery);
+    const data = await response.json();
+
+    if (data.data && data.data.products) {
+      hasMoreProducts = data.data.products.pageInfo.hasNextPage;
+      data.data.products.edges.forEach((productEdge) => {
+        const product = productEdge.node;
+        product.variants.edges.forEach((variantEdge) => {
+          const variant = variantEdge.node;
+          variants.push({
+            id: variant.id,
+            sku: variant.sku,
+            variantTitle: variant.title,
+            productTitle: product.title,
+            inventoryQuantity: variant.inventoryQuantity || 0,
+            metafields: variant.metafields.edges.map((m) => m.node),
+          });
+        });
+      });
+    }
+  } catch (error) {
+    console.error("Error fetching products:", error);
+  }
+
+  return { variants, suppliers, hasMoreProducts, isPartialData: hasMoreProducts };
+}
+
+export async function action({ request }) {
+  const { admin } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const intent = formData.get("intent");
+
+  if (intent === "loadAllProducts") {
+    // Fetch ALL products with pagination
+    let allVariants = [];
     let hasNextPage = true;
     let cursor = null;
     let pageCount = 0;
-    const maxPages = 20; // Safety limit to prevent infinite loops
+    const maxPages = 50;
 
     while (hasNextPage && pageCount < maxPages) {
       try {
@@ -101,17 +173,25 @@ export async function loader({ request }) {
         });
         const data = await response.json();
 
-        if (data.errors) {
-          console.error("GraphQL errors:", data.errors);
+        if (data.errors || !data.data?.products) {
           break;
         }
 
-        if (!data.data || !data.data.products) {
-          console.error("Unexpected response:", data);
-          break;
-        }
+        data.data.products.edges.forEach((productEdge) => {
+          const product = productEdge.node;
+          product.variants.edges.forEach((variantEdge) => {
+            const variant = variantEdge.node;
+            allVariants.push({
+              id: variant.id,
+              sku: variant.sku,
+              variantTitle: variant.title,
+              productTitle: product.title,
+              inventoryQuantity: variant.inventoryQuantity || 0,
+              metafields: variant.metafields.edges.map((m) => m.node),
+            });
+          });
+        });
 
-        allProducts = [...allProducts, ...data.data.products.edges];
         hasNextPage = data.data.products.pageInfo.hasNextPage;
         cursor = data.data.products.pageInfo.endCursor;
         pageCount++;
@@ -121,34 +201,10 @@ export async function loader({ request }) {
       }
     }
 
-    return allProducts;
+    return { variants: allVariants, isComplete: true };
   }
 
-  // Fetch all products
-  let variants = [];
-  try {
-    const productEdges = await fetchAllProducts();
-
-    // Transform data
-    productEdges.forEach((productEdge) => {
-      const product = productEdge.node;
-      product.variants.edges.forEach((variantEdge) => {
-        const variant = variantEdge.node;
-        variants.push({
-          id: variant.id,
-          sku: variant.sku,
-          variantTitle: variant.title,
-          productTitle: product.title,
-          inventoryQuantity: variant.inventoryQuantity || 0,
-          metafields: variant.metafields.edges.map((m) => m.node),
-        });
-      });
-    });
-  } catch (error) {
-    console.error("Error processing products:", error);
-  }
-
-  return { variants, suppliers };
+  return { error: "Unknown intent" };
 }
 
 // Helper function to get metafield value
@@ -160,10 +216,22 @@ function getMetafieldValue(metafields, namespace, key) {
 }
 
 export default function SupplierDashboard() {
-  const { variants, suppliers } = useLoaderData();
+  const loaderData = useLoaderData();
   const navigate = useNavigate();
+  const fetcher = useFetcher();
+
   const [sortColumn, setSortColumn] = useState("totalVariants");
   const [sortDirection, setSortDirection] = useState("descending");
+
+  // Use fetcher data if available (full data), otherwise use loader data (partial)
+  const variants = fetcher.data?.variants || loaderData.variants;
+  const suppliers = loaderData.suppliers;
+  const isPartialData = fetcher.data?.isComplete ? false : loaderData.isPartialData;
+  const isLoading = fetcher.state === "submitting" || fetcher.state === "loading";
+
+  const loadAllData = useCallback(() => {
+    fetcher.submit({ intent: "loadAllProducts" }, { method: "post" });
+  }, [fetcher]);
 
   // Calculate supplier statistics
   const supplierStatsRaw = useMemo(() => {
@@ -330,6 +398,26 @@ export default function SupplierDashboard() {
       <Page fullWidth>
         <BlockStack gap="400">
           <AppNavigation />
+
+          {isPartialData && !isLoading && (
+            <Banner
+              title="Showing partial data"
+              tone="warning"
+              action={{ content: "Load All Products", onAction: loadAllData }}
+            >
+              <p>Statistics are based on the first 50 products. Click "Load All Products" to see complete statistics for all products.</p>
+            </Banner>
+          )}
+
+          {isLoading && (
+            <Card>
+              <BlockStack gap="200">
+                <Text variant="bodyMd">Loading all products...</Text>
+                <ProgressBar progress={75} tone="primary" />
+              </BlockStack>
+            </Card>
+          )}
+
           <InlineStack gap="400" wrap>
             <Card background="bg-surface-secondary">
               <BlockStack gap="100" inlineAlign="center">
@@ -344,7 +432,7 @@ export default function SupplierDashboard() {
             <Card background="bg-surface-secondary">
               <BlockStack gap="100" inlineAlign="center">
                 <Text variant="bodyMd" tone="subdued">
-                  Total Products
+                  Total Products{isPartialData ? "*" : ""}
                 </Text>
                 <Text variant="heading2xl" as="h3">
                   {totalStats.totalVariants}
@@ -354,7 +442,7 @@ export default function SupplierDashboard() {
             <Card background="bg-surface-secondary">
               <BlockStack gap="100" inlineAlign="center">
                 <Text variant="bodyMd" tone="subdued">
-                  At Risk Products
+                  At Risk Products{isPartialData ? "*" : ""}
                 </Text>
                 <Text variant="heading2xl" as="h3">
                   {totalStats.atRiskVariants}
@@ -364,7 +452,7 @@ export default function SupplierDashboard() {
             <Card background="bg-surface-secondary">
               <BlockStack gap="100" inlineAlign="center">
                 <Text variant="bodyMd" tone="subdued">
-                  Needs Reorder
+                  Needs Reorder{isPartialData ? "*" : ""}
                 </Text>
                 <Text variant="heading2xl" as="h3">
                   {totalStats.needsReorder}
@@ -374,7 +462,7 @@ export default function SupplierDashboard() {
             <Card background="bg-surface-secondary">
               <BlockStack gap="100" inlineAlign="center">
                 <Text variant="bodyMd" tone="subdued">
-                  Total Inventory Value
+                  Total Inventory Value{isPartialData ? "*" : ""}
                 </Text>
                 <Text variant="heading2xl" as="h3">
                   ${totalStats.totalValue.toFixed(2)}

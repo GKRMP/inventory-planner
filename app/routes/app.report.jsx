@@ -21,16 +21,22 @@ export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
   try {
-    // Get URL params for pagination
+    // Get URL params for pagination and filters
     const url = new URL(request.url);
     const cursor = url.searchParams.get("cursor");
     const direction = url.searchParams.get("direction") || "forward";
     const riskFilter = url.searchParams.get("risk") || "";
+    const statusFilter = url.searchParams.get("status") || "ACTIVE";
+    const channelsParam = url.searchParams.get("channels") || "online,pos";
+    const selectedChannels = channelsParam.split(",").filter(Boolean);
+
+    // Build query filter
+    const queryFilter = statusFilter ? `status:${statusFilter}` : "";
 
     // Fetch one page of products (50 products at a time for speed)
     const productsQuery = direction === "backward" ? `
-      query GetProducts($cursor: String) {
-        products(last: 50, before: $cursor, query: "status:ACTIVE") {
+      query GetProducts($cursor: String, $query: String) {
+        products(last: 50, before: $cursor, query: $query) {
           pageInfo {
             hasNextPage
             hasPreviousPage
@@ -42,6 +48,17 @@ export async function loader({ request }) {
               id
               title
               status
+              resourcePublications(first: 10) {
+                nodes {
+                  isPublished
+                  publication {
+                    id
+                    catalog {
+                      title
+                    }
+                  }
+                }
+              }
               variants(first: 100) {
                 edges {
                   node {
@@ -67,8 +84,8 @@ export async function loader({ request }) {
         }
       }
     ` : `
-      query GetProducts($cursor: String) {
-        products(first: 50, after: $cursor, query: "status:ACTIVE") {
+      query GetProducts($cursor: String, $query: String) {
+        products(first: 50, after: $cursor, query: $query) {
           pageInfo {
             hasNextPage
             hasPreviousPage
@@ -80,6 +97,17 @@ export async function loader({ request }) {
               id
               title
               status
+              resourcePublications(first: 10) {
+                nodes {
+                  isPublished
+                  publication {
+                    id
+                    catalog {
+                      title
+                    }
+                  }
+                }
+              }
               variants(first: 100) {
                 edges {
                   node {
@@ -126,7 +154,7 @@ export async function loader({ request }) {
 
     const [productsResponse, suppliersResponse] = await Promise.all([
       admin.graphql(productsQuery, {
-        variables: { cursor },
+        variables: { cursor, query: queryFilter },
       }),
       admin.graphql(suppliersQuery),
     ]);
@@ -136,39 +164,61 @@ export async function loader({ request }) {
 
     if (productsData.errors) {
       console.error("Products GraphQL errors:", productsData.errors);
-      return { variants: [], suppliers: [], pageInfo: null, currentRisk: riskFilter };
+      return { variants: [], suppliers: [], pageInfo: null, currentRisk: riskFilter, currentStatus: statusFilter, currentChannels: selectedChannels };
     }
 
     if (!suppliersData.data || !suppliersData.data.metaobjects) {
       console.error("Suppliers response error:", suppliersData);
-      return { variants: [], suppliers: [], pageInfo: null, currentRisk: riskFilter };
+      return { variants: [], suppliers: [], pageInfo: null, currentRisk: riskFilter, currentStatus: statusFilter, currentChannels: selectedChannels };
     }
 
-    // Transform data for easier use
+    // Helper function to check if product is published to selected channels
+    const isPublishedToSelectedChannels = (product) => {
+      if (selectedChannels.length === 0) return true;
+
+      const publishedChannels = product.resourcePublications?.nodes || [];
+      return publishedChannels.some((rp) => {
+        if (!rp.isPublished) return false;
+        const pubTitle = rp.publication?.catalog?.title?.toLowerCase() || "";
+
+        return selectedChannels.some((ch) => {
+          if (ch === "online" && pubTitle.includes("online store")) return true;
+          if (ch === "pos" && (pubTitle.includes("point of sale") || pubTitle.includes("pos"))) return true;
+          if (ch === "shop" && pubTitle.includes("shop") && !pubTitle.includes("online")) return true;
+          return false;
+        });
+      });
+    };
+
+    // Transform data for easier use, filtering by selected channels
     const variants = [];
     const productEdges = productsData.data?.products?.edges || [];
     productEdges.forEach((productEdge) => {
       const product = productEdge.node;
-      product.variants.edges.forEach((variantEdge) => {
-        const variant = variantEdge.node;
-        variants.push({
-          id: variant.id,
-          sku: variant.sku,
-          variantTitle: variant.title,
-          productTitle: product.title,
-          inventoryQuantity: variant.inventoryQuantity || 0,
-          metafields: variant.metafields.edges.map((m) => m.node),
+
+      // Only include products published to selected channels
+      if (isPublishedToSelectedChannels(product)) {
+        product.variants.edges.forEach((variantEdge) => {
+          const variant = variantEdge.node;
+          variants.push({
+            id: variant.id,
+            sku: variant.sku,
+            variantTitle: variant.title,
+            productTitle: product.title,
+            inventoryQuantity: variant.inventoryQuantity || 0,
+            metafields: variant.metafields.edges.map((m) => m.node),
+          });
         });
-      });
+      }
     });
 
     const suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
     const pageInfo = productsData.data?.products?.pageInfo || null;
 
-    return { variants, suppliers, pageInfo, currentRisk: riskFilter };
+    return { variants, suppliers, pageInfo, currentRisk: riskFilter, currentStatus: statusFilter, currentChannels: selectedChannels };
   } catch (error) {
     console.error("Report loader error:", error);
-    return { variants: [], suppliers: [], pageInfo: null, currentRisk: "" };
+    return { variants: [], suppliers: [], pageInfo: null, currentRisk: "", currentStatus: "ACTIVE", currentChannels: ["online", "pos"] };
   }
 }
 
@@ -279,10 +329,12 @@ function calculateMetrics(variant, suppliers) {
 }
 
 export default function Report() {
-  const { variants, suppliers, pageInfo, currentRisk } = useLoaderData();
+  const { variants, suppliers, pageInfo, currentRisk, currentStatus, currentChannels } = useLoaderData();
   const navigate = useNavigate();
   const [queryValue, setQueryValue] = useState("");
   const [riskFilter, setRiskFilter] = useState(currentRisk ? [currentRisk] : []);
+  const [statusFilter, setStatusFilter] = useState([currentStatus || "ACTIVE"]);
+  const [channelFilter, setChannelFilter] = useState(currentChannels || ["online", "pos"]);
   const [selectedTab, setSelectedTab] = useState(0);
   const [sortedColumn, setSortedColumn] = useState("daysUntilStockout");
   const [sortDirection, setSortDirection] = useState("ascending");
@@ -298,6 +350,22 @@ export default function Report() {
     { id: "low", content: "Low Risk", riskValue: "low" },
   ];
 
+  // Build URL with all current filters
+  const buildFilterUrl = useCallback((overrides = {}) => {
+    const params = new URLSearchParams();
+    const status = overrides.status !== undefined ? overrides.status : (statusFilter.length > 0 ? statusFilter[0] : "ACTIVE");
+    const channels = overrides.channels !== undefined ? overrides.channels : channelFilter.join(",");
+    const risk = overrides.risk !== undefined ? overrides.risk : (riskFilter.length > 0 ? riskFilter[0] : "");
+
+    params.set("status", status);
+    params.set("channels", channels);
+    if (risk) params.set("risk", risk);
+    if (overrides.cursor) params.set("cursor", overrides.cursor);
+    if (overrides.direction) params.set("direction", overrides.direction);
+
+    return `/app/report?${params.toString()}`;
+  }, [statusFilter, channelFilter, riskFilter]);
+
   const handleTabChange = useCallback((index) => {
     setSelectedTab(index);
     const tab = tabs[index];
@@ -311,25 +379,27 @@ export default function Report() {
   // Server-side pagination handlers
   const handleNextPage = useCallback(() => {
     if (pageInfo?.hasNextPage && pageInfo?.endCursor) {
-      const risk = riskFilter.length > 0 ? riskFilter[0] : "";
-      const params = new URLSearchParams();
-      params.set("cursor", pageInfo.endCursor);
-      params.set("direction", "forward");
-      if (risk) params.set("risk", risk);
-      navigate(`/app/report?${params.toString()}`);
+      navigate(buildFilterUrl({ cursor: pageInfo.endCursor, direction: "forward" }));
     }
-  }, [pageInfo, riskFilter, navigate]);
+  }, [pageInfo, buildFilterUrl, navigate]);
 
   const handlePreviousPage = useCallback(() => {
     if (pageInfo?.hasPreviousPage && pageInfo?.startCursor) {
-      const risk = riskFilter.length > 0 ? riskFilter[0] : "";
-      const params = new URLSearchParams();
-      params.set("cursor", pageInfo.startCursor);
-      params.set("direction", "backward");
-      if (risk) params.set("risk", risk);
-      navigate(`/app/report?${params.toString()}`);
+      navigate(buildFilterUrl({ cursor: pageInfo.startCursor, direction: "backward" }));
     }
-  }, [pageInfo, riskFilter, navigate]);
+  }, [pageInfo, buildFilterUrl, navigate]);
+
+  // Server-side filter handlers
+  const handleStatusFilterChange = useCallback((value) => {
+    setStatusFilter(value);
+    const status = value.length > 0 ? value[0] : "ACTIVE";
+    navigate(buildFilterUrl({ status }));
+  }, [navigate, buildFilterUrl]);
+
+  const handleChannelFilterChange = useCallback((value) => {
+    setChannelFilter(value);
+    navigate(buildFilterUrl({ channels: value.join(",") }));
+  }, [navigate, buildFilterUrl]);
 
   // Calculate metrics for all variants
   const variantsWithMetrics = useMemo(() => {
@@ -439,7 +509,10 @@ export default function Report() {
   const handleFiltersClearAll = useCallback(() => {
     setQueryValue("");
     setRiskFilter([]);
-  }, []);
+    setStatusFilter(["ACTIVE"]);
+    setChannelFilter(["online", "pos"]);
+    navigate("/app/report?status=ACTIVE&channels=online,pos");
+  }, [navigate]);
 
   const handleRiskFilterChange = useCallback((value) => {
     setRiskFilter(value);
@@ -448,6 +521,16 @@ export default function Report() {
   const handleRiskFilterRemove = useCallback(() => {
     setRiskFilter([]);
   }, []);
+
+  const handleStatusFilterRemove = useCallback(() => {
+    setStatusFilter(["ACTIVE"]);
+    navigate(buildFilterUrl({ status: "ACTIVE" }));
+  }, [navigate, buildFilterUrl]);
+
+  const handleChannelFilterRemove = useCallback(() => {
+    setChannelFilter(["online", "pos"]);
+    navigate(buildFilterUrl({ channels: "online,pos" }));
+  }, [navigate, buildFilterUrl]);
 
   const filters = [
     {
@@ -471,6 +554,43 @@ export default function Report() {
       ),
       shortcut: true,
     },
+    {
+      key: "status",
+      label: "Status",
+      filter: (
+        <ChoiceList
+          title="Product Status"
+          titleHidden
+          choices={[
+            { label: "Active", value: "ACTIVE" },
+            { label: "Draft", value: "DRAFT" },
+            { label: "Archived", value: "ARCHIVED" },
+          ]}
+          selected={statusFilter}
+          onChange={handleStatusFilterChange}
+        />
+      ),
+      shortcut: true,
+    },
+    {
+      key: "channels",
+      label: "Channels",
+      filter: (
+        <ChoiceList
+          title="Sales Channels"
+          titleHidden
+          choices={[
+            { label: "Online Store", value: "online" },
+            { label: "Point of Sale", value: "pos" },
+            { label: "Shop App", value: "shop" },
+          ]}
+          selected={channelFilter}
+          onChange={handleChannelFilterChange}
+          allowMultiple
+        />
+      ),
+      shortcut: true,
+    },
   ];
 
   const appliedFilters = [];
@@ -486,6 +606,21 @@ export default function Report() {
       key: "riskLevel",
       label: `Risk: ${riskFilter.map(r => riskLabels[r]).join(", ")}`,
       onRemove: handleRiskFilterRemove,
+    });
+  }
+  if (statusFilter.length > 0 && !(statusFilter.length === 1 && statusFilter[0] === "ACTIVE")) {
+    appliedFilters.push({
+      key: "status",
+      label: `Status: ${statusFilter.join(", ")}`,
+      onRemove: handleStatusFilterRemove,
+    });
+  }
+  if (channelFilter.length > 0 && !(channelFilter.length === 2 && channelFilter.includes("online") && channelFilter.includes("pos"))) {
+    const channelLabels = { online: "Online Store", pos: "Point of Sale", shop: "Shop App" };
+    appliedFilters.push({
+      key: "channels",
+      label: `Channels: ${channelFilter.map(c => channelLabels[c] || c).join(", ")}`,
+      onRemove: handleChannelFilterRemove,
     });
   }
 
