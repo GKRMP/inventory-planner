@@ -14,6 +14,8 @@ import {
   BlockStack,
   Select,
   InlineStack,
+  Checkbox,
+  Divider,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
@@ -115,6 +117,7 @@ export default function ProductsPage() {
   const [editingIndex, setEditingIndex] = useState(null);
   const [form, setForm] = useState({
     supplier_id: "",
+    mpn: "",
     lead_time: "",
     last_order_date: "",
     last_order_cpu: "",
@@ -175,6 +178,7 @@ export default function ProductsPage() {
     // Reset form
     setForm({
       supplier_id: "",
+      mpn: "",
       lead_time: "",
       last_order_date: "",
       last_order_cpu: "",
@@ -196,6 +200,7 @@ export default function ProductsPage() {
 
     const newSupplier = {
       supplier_id: form.supplier_id,
+      mpn: form.mpn,
       lead_time: parseInt(form.lead_time) || 0,
       last_order_date: form.last_order_date,
       last_order_cpu: parseFloat(form.last_order_cpu) || 0,
@@ -223,6 +228,7 @@ export default function ProductsPage() {
     // Reset form
     setForm({
       supplier_id: "",
+      mpn: "",
       lead_time: "",
       last_order_date: "",
       last_order_cpu: "",
@@ -239,6 +245,7 @@ export default function ProductsPage() {
     const supplier = suppliersList[index];
     setForm({
       supplier_id: supplier.supplier_id || "",
+      mpn: supplier.mpn || "",
       lead_time: supplier.lead_time?.toString() || "",
       last_order_date: supplier.last_order_date || "",
       last_order_cpu: supplier.last_order_cpu?.toString() || "",
@@ -283,6 +290,7 @@ export default function ProductsPage() {
     setSuppliersList([]);
     setForm({
       supplier_id: "",
+      mpn: "",
       lead_time: "",
       last_order_date: "",
       last_order_cpu: "",
@@ -483,178 +491,209 @@ export default function ProductsPage() {
       >
         <Modal.Section>
           <BlockStack gap="400">
+            {/* Product Section */}
             {selectedVariant && (
               <Card>
                 <BlockStack gap="200">
-                  <Text variant="headingMd" as="h3">
-                    {selectedVariant.productTitle}
+                  <Text variant="headingMd" as="h3">Product</Text>
+                  <Text variant="bodyMd" as="p">
+                    <Text as="span" fontWeight="semibold">Name:</Text> {selectedVariant.productTitle}
                   </Text>
                   <Text variant="bodyMd" as="p">
-                    SKU: {selectedVariant.sku || "N/A"}
+                    <Text as="span" fontWeight="semibold">SKU:</Text> {selectedVariant.sku || "N/A"}
                   </Text>
                   <Text variant="bodyMd" as="p">
-                    Variant: {selectedVariant.variantTitle}
+                    <Text as="span" fontWeight="semibold">Variant:</Text> {selectedVariant.variantTitle}
                   </Text>
                   <Text variant="bodyMd" as="p">
-                    On Hand: {selectedVariant.inventoryQuantity}
+                    <Text as="span" fontWeight="semibold">On Hand:</Text> {selectedVariant.inventoryQuantity}
                   </Text>
                 </BlockStack>
               </Card>
             )}
 
-            {suppliersList.length > 0 && (
-              <Card>
+            {/* Existing Suppliers Section - repeats for each supplier */}
+            {suppliersList.length > 0 && suppliersList.map((sup, index) => (
+              <Card key={index} background={sup.is_primary ? "bg-fill-success-secondary" : "bg-surface"}>
                 <BlockStack gap="300">
-                  <Text variant="headingMd" as="h3">
-                    Current Suppliers ({suppliersList.length})
-                  </Text>
-                  {suppliersList.map((sup, index) => (
-                    <Card key={index} background={sup.is_primary ? "bg-fill-success-secondary" : "bg-surface"}>
-                      <InlineStack align="space-between" blockAlign="center">
-                        <BlockStack gap="100">
-                          <Text variant="bodyMd" fontWeight="semibold">
-                            {getSupplierNameById(sup.supplier_id)}
-                            {sup.is_primary && " (Primary)"}
-                          </Text>
-                          <Text variant="bodySm" tone="subdued">
-                            Lead Time: {sup.lead_time} days | Threshold: {sup.threshold} | Daily Demand: {sup.daily_demand}
-                          </Text>
-                        </BlockStack>
-                        <InlineStack gap="200">
-                          <Button size="slim" onClick={() => editSupplier(index)}>
-                            Edit
-                          </Button>
-                          <Button size="slim" tone="critical" onClick={() => removeSupplier(index)}>
-                            Remove
-                          </Button>
-                        </InlineStack>
-                      </InlineStack>
-                    </Card>
-                  ))}
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text variant="headingMd" as="h3">
+                      {getSupplierNameById(sup.supplier_id)}
+                      {sup.is_primary && " (Primary)"}
+                    </Text>
+                    <InlineStack gap="200">
+                      <Button size="slim" onClick={() => editSupplier(index)}>
+                        Edit
+                      </Button>
+                      <Button size="slim" tone="critical" onClick={() => removeSupplier(index)}>
+                        Remove
+                      </Button>
+                    </InlineStack>
+                  </InlineStack>
+
+                  {sup.mpn && (
+                    <Text variant="bodySm" as="p">
+                      <Text as="span" fontWeight="semibold">MPN:</Text> {sup.mpn}
+                    </Text>
+                  )}
+
+                  <InlineStack gap="400" wrap={true}>
+                    <Text variant="bodySm" as="span">
+                      <Text as="span" fontWeight="semibold">Lead Time:</Text> {sup.lead_time} days
+                    </Text>
+                    <Text variant="bodySm" as="span">
+                      <Text as="span" fontWeight="semibold">Threshold:</Text> {sup.threshold}
+                    </Text>
+                    <Text variant="bodySm" as="span">
+                      <Text as="span" fontWeight="semibold">Daily Demand:</Text> {sup.daily_demand}
+                    </Text>
+                  </InlineStack>
+
+                  <InlineStack gap="400" wrap={true}>
+                    <Text variant="bodySm" as="span">
+                      <Text as="span" fontWeight="semibold">Last Order:</Text> {sup.last_order_date || "N/A"}
+                    </Text>
+                    <Text variant="bodySm" as="span">
+                      <Text as="span" fontWeight="semibold">CPU:</Text> ${sup.last_order_cpu || 0}
+                    </Text>
+                    <Text variant="bodySm" as="span">
+                      <Text as="span" fontWeight="semibold">Qty:</Text> {sup.last_order_quantity || 0}
+                    </Text>
+                  </InlineStack>
+
+                  {sup.notes && (
+                    <Text variant="bodySm" as="p" tone="subdued">
+                      <Text as="span" fontWeight="semibold">Notes:</Text> {sup.notes}
+                    </Text>
+                  )}
                 </BlockStack>
               </Card>
-            )}
+            ))}
 
+            {/* Add/Edit Supplier Section */}
             <Card>
-              <BlockStack gap="300">
-                <Text variant="headingMd" as="h3">
-                  {editingIndex !== null ? "Edit Supplier" : "Add Supplier"}
-                </Text>
+              <BlockStack gap="400">
+                <Text variant="headingMd" as="h3">Supplier</Text>
+
+                <Select
+                  label="Supplier"
+                  options={supplierOptions}
+                  value={form.supplier_id}
+                  onChange={(v) => setForm({ ...form, supplier_id: v })}
+                  required
+                />
+
+                <TextField
+                  label="MPN (Manufacturer Part Number)"
+                  value={form.mpn}
+                  onChange={(v) => setForm({ ...form, mpn: v })}
+                  placeholder="Supplier's part number for this product"
+                />
+
+                <InlineStack gap="400">
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Lead Time (days)"
+                      type="number"
+                      value={form.lead_time}
+                      onChange={(v) => setForm({ ...form, lead_time: v })}
+                      min="0"
+                      helpText="Number of days to fulfill an order"
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Threshold (min stock)"
+                      type="number"
+                      value={form.threshold}
+                      onChange={(v) => setForm({ ...form, threshold: v })}
+                      min="0"
+                      helpText="Minimum quantity to keep in stock"
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Daily Demand"
+                      type="number"
+                      value={form.daily_demand}
+                      onChange={(v) => setForm({ ...form, daily_demand: v })}
+                      min="0"
+                      step="0.01"
+                      helpText="Average number sold per day"
+                    />
+                  </div>
+                </InlineStack>
+
+                <InlineStack gap="400">
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Last Order Date"
+                      type="date"
+                      value={form.last_order_date}
+                      onChange={(v) => setForm({ ...form, last_order_date: v })}
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Last Order Cost Per Unit ($)"
+                      type="number"
+                      value={form.last_order_cpu}
+                      onChange={(v) => setForm({ ...form, last_order_cpu: v })}
+                      min="0"
+                      step="0.01"
+                      prefix="$"
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Last Order Quantity"
+                      type="number"
+                      value={form.last_order_quantity}
+                      onChange={(v) => setForm({ ...form, last_order_quantity: v })}
+                      min="0"
+                    />
+                  </div>
+                </InlineStack>
+
+                <TextField
+                  label="Notes"
+                  value={form.notes}
+                  onChange={(v) => setForm({ ...form, notes: v })}
+                  multiline={3}
+                />
+
+                <Checkbox
+                  label="Set as Primary Supplier"
+                  checked={form.is_primary}
+                  onChange={(checked) => setForm({ ...form, is_primary: checked })}
+                />
+
+                <InlineStack gap="200">
+                  <Button onClick={addSupplier} variant="primary">
+                    {editingIndex !== null ? "Update Supplier" : "Add Supplier"}
+                  </Button>
+                  {editingIndex !== null && (
+                    <Button onClick={() => {
+                      setForm({
+                        supplier_id: "",
+                        mpn: "",
+                        lead_time: "",
+                        last_order_date: "",
+                        last_order_cpu: "",
+                        last_order_quantity: "",
+                        threshold: "",
+                        daily_demand: "",
+                        notes: "",
+                        is_primary: false,
+                      });
+                      setEditingIndex(null);
+                    }}>
+                      Cancel Edit
+                    </Button>
+                  )}
+                </InlineStack>
               </BlockStack>
             </Card>
-
-            <Select
-              label="Supplier"
-              options={supplierOptions}
-              value={form.supplier_id}
-              onChange={(v) => setForm({ ...form, supplier_id: v })}
-              required
-            />
-
-            <InlineStack gap="400">
-              <div style={{ flex: 1 }}>
-                <TextField
-                  label="Lead Time (days)"
-                  type="number"
-                  value={form.lead_time}
-                  onChange={(v) => setForm({ ...form, lead_time: v })}
-                  min="0"
-                />
-              </div>
-              <div style={{ flex: 1 }}>
-                <TextField
-                  label="Threshold (min stock)"
-                  type="number"
-                  value={form.threshold}
-                  onChange={(v) => setForm({ ...form, threshold: v })}
-                  min="0"
-                  helpText="Minimum quantity to keep in stock"
-                />
-              </div>
-            </InlineStack>
-
-            <TextField
-              label="Daily Demand"
-              type="number"
-              value={form.daily_demand}
-              onChange={(v) => setForm({ ...form, daily_demand: v })}
-              min="0"
-              step="0.01"
-              helpText="Average number sold per day"
-            />
-
-            <TextField
-              label="Last Order Date"
-              type="date"
-              value={form.last_order_date}
-              onChange={(v) => setForm({ ...form, last_order_date: v })}
-            />
-
-            <InlineStack gap="400">
-              <div style={{ flex: 1 }}>
-                <TextField
-                  label="Last Order Cost Per Unit ($)"
-                  type="number"
-                  value={form.last_order_cpu}
-                  onChange={(v) => setForm({ ...form, last_order_cpu: v })}
-                  min="0"
-                  step="0.01"
-                  prefix="$"
-                />
-              </div>
-              <div style={{ flex: 1 }}>
-                <TextField
-                  label="Last Order Quantity"
-                  type="number"
-                  value={form.last_order_quantity}
-                  onChange={(v) => setForm({ ...form, last_order_quantity: v })}
-                  min="0"
-                />
-              </div>
-            </InlineStack>
-
-            <TextField
-              label="Notes"
-              value={form.notes}
-              onChange={(v) => setForm({ ...form, notes: v })}
-              multiline={3}
-            />
-
-            <InlineStack align="start">
-              <input
-                type="checkbox"
-                checked={form.is_primary}
-                onChange={(e) => setForm({ ...form, is_primary: e.target.checked })}
-                style={{ marginRight: "8px", marginTop: "2px" }}
-              />
-              <Text variant="bodyMd" as="span">
-                Set as Primary Supplier
-              </Text>
-            </InlineStack>
-
-            <InlineStack gap="200">
-              <Button onClick={addSupplier} variant="primary">
-                {editingIndex !== null ? "Update Supplier" : "Add Supplier"}
-              </Button>
-              {editingIndex !== null && (
-                <Button onClick={() => {
-                  setForm({
-                    supplier_id: "",
-                    lead_time: "",
-                    last_order_date: "",
-                    last_order_cpu: "",
-                    last_order_quantity: "",
-                    threshold: "",
-                    daily_demand: "",
-                    notes: "",
-                    is_primary: false,
-                  });
-                  setEditingIndex(null);
-                }}>
-                  Cancel Edit
-                </Button>
-              )}
-            </InlineStack>
           </BlockStack>
         </Modal.Section>
       </Modal>

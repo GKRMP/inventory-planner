@@ -15,7 +15,8 @@
       "mcp__shopify-dev-mcp__learn_shopify_api",
       "Bash(npm install:*)",
       "Bash(npx prisma db push:*)",
-      "Bash(PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION=\"yes\" npx prisma db push:*)"
+      "Bash(PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION=\"yes\" npx prisma db push:*)",
+      "mcp__shopify-dev-mcp__fetch_full_docs"
     ]
   }
 }
