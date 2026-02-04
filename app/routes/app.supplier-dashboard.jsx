@@ -17,14 +17,48 @@ import AppNavigation from "../components/AppNavigation";
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
+  // Fetch all suppliers first - this is quick and critical
+  let suppliers = [];
   try {
-    // Helper function to fetch all products with pagination
-    async function fetchAllProducts() {
-      let allProducts = [];
-      let hasNextPage = true;
-      let cursor = null;
+    const suppliersQuery = `
+      {
+        metaobjects(type: "supplier", first: 250) {
+          edges {
+            node {
+              id
+              handle
+              fields {
+                key
+                value
+              }
+            }
+          }
+        }
+      }
+    `;
 
-      while (hasNextPage) {
+    const suppliersResponse = await admin.graphql(suppliersQuery);
+    const suppliersData = await suppliersResponse.json();
+
+    if (suppliersData.data && suppliersData.data.metaobjects) {
+      suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
+    } else {
+      console.error("Suppliers response error:", suppliersData);
+    }
+  } catch (error) {
+    console.error("Error fetching suppliers:", error);
+  }
+
+  // Helper function to fetch all products with pagination
+  async function fetchAllProducts() {
+    let allProducts = [];
+    let hasNextPage = true;
+    let cursor = null;
+    let pageCount = 0;
+    const maxPages = 20; // Safety limit to prevent infinite loops
+
+    while (hasNextPage && pageCount < maxPages) {
+      try {
         const productsQuery = `
           query GetProducts($cursor: String) {
             products(first: 250, after: $cursor) {
@@ -80,43 +114,22 @@ export async function loader({ request }) {
         allProducts = [...allProducts, ...data.data.products.edges];
         hasNextPage = data.data.products.pageInfo.hasNextPage;
         cursor = data.data.products.pageInfo.endCursor;
+        pageCount++;
+      } catch (error) {
+        console.error("Error fetching products page:", error);
+        break;
       }
-
-      return allProducts;
     }
 
-    // Fetch all suppliers
-    const suppliersQuery = `
-      {
-        metaobjects(type: "supplier", first: 250) {
-          edges {
-            node {
-              id
-              handle
-              fields {
-                key
-                value
-              }
-            }
-          }
-        }
-      }
-    `;
+    return allProducts;
+  }
 
-    const [productEdges, suppliersResponse] = await Promise.all([
-      fetchAllProducts(),
-      admin.graphql(suppliersQuery),
-    ]);
-
-    const suppliersData = await suppliersResponse.json();
-
-    if (!suppliersData.data || !suppliersData.data.metaobjects) {
-      console.error("Suppliers response error:", suppliersData);
-      return { variants: [], suppliers: [] };
-    }
+  // Fetch all products
+  let variants = [];
+  try {
+    const productEdges = await fetchAllProducts();
 
     // Transform data
-    const variants = [];
     productEdges.forEach((productEdge) => {
       const product = productEdge.node;
       product.variants.edges.forEach((variantEdge) => {
@@ -131,14 +144,11 @@ export async function loader({ request }) {
         });
       });
     });
-
-    const suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
-
-    return { variants, suppliers };
   } catch (error) {
-    console.error("Supplier dashboard loader error:", error);
-    return { variants: [], suppliers: [] };
+    console.error("Error processing products:", error);
   }
+
+  return { variants, suppliers };
 }
 
 // Helper function to get metafield value
