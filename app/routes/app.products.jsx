@@ -46,14 +46,6 @@ export async function loader({ request }) {
                 id
                 title
                 status
-                publishedOnCurrentPublication
-                resourcePublicationOnCurrentPublication {
-                  publication {
-                    id
-                    name
-                  }
-                  isPublished
-                }
                 variants(first: 250) {
                   edges {
                     node {
@@ -85,6 +77,11 @@ export async function loader({ request }) {
       });
       const data = await response.json();
 
+      if (data.errors) {
+        console.error("GraphQL errors:", data.errors);
+        throw new Error("Failed to fetch products");
+      }
+
       allProducts = [...allProducts, ...data.data.products.edges];
       hasNextPage = data.data.products.pageInfo.hasNextPage;
       cursor = data.data.products.pageInfo.endCursor;
@@ -92,20 +89,6 @@ export async function loader({ request }) {
 
     return allProducts;
   }
-
-  // Fetch all publications/channels
-  const publicationsQuery = `
-    {
-      publications(first: 50) {
-        edges {
-          node {
-            id
-            name
-          }
-        }
-      }
-    }
-  `;
 
   // Fetch suppliers
   const suppliersQuery = `
@@ -125,13 +108,11 @@ export async function loader({ request }) {
     }
   `;
 
-  const [productEdges, publicationsResponse, suppliersResponse] = await Promise.all([
+  const [productEdges, suppliersResponse] = await Promise.all([
     fetchAllProducts(),
-    admin.graphql(publicationsQuery),
     admin.graphql(suppliersQuery),
   ]);
 
-  const publicationsData = await publicationsResponse.json();
   const suppliersData = await suppliersResponse.json();
 
   // Transform data
@@ -145,8 +126,7 @@ export async function loader({ request }) {
         sku: variant.sku,
         variantTitle: variant.title,
         productTitle: product.title,
-        productStatus: product.status,
-        publishedOnCurrentPublication: product.publishedOnCurrentPublication,
+        productStatus: product.status || "ACTIVE",
         inventoryQuantity: variant.inventoryQuantity || 0,
         metafields: variant.metafields.edges.map((m) => m.node),
       });
@@ -154,13 +134,12 @@ export async function loader({ request }) {
   });
 
   const suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
-  const publications = publicationsData.data.publications.edges.map((e) => e.node);
 
-  return { variants, suppliers, publications };
+  return { variants, suppliers };
 }
 
 export default function ProductsPage() {
-  const { variants, suppliers, publications } = useLoaderData();
+  const { variants, suppliers } = useLoaderData();
   const revalidator = useRevalidator();
   const navigate = useNavigate();
 
@@ -188,7 +167,6 @@ export default function ProductsPage() {
 
   // Filter states
   const [statusFilter, setStatusFilter] = useState(["ACTIVE"]); // Default to Active
-  const [channelFilter, setChannelFilter] = useState([]);
 
   // Pagination state
   const ITEMS_PER_PAGE = 50;
@@ -204,25 +182,14 @@ export default function ProductsPage() {
     setCurrentPage(1);
   }, []);
 
-  const handleChannelFilterChange = useCallback((value) => {
-    setChannelFilter(value);
-    setCurrentPage(1);
-  }, []);
-
   const handleFiltersClearAll = useCallback(() => {
     setQueryValue("");
     setStatusFilter(["ACTIVE"]);
-    setChannelFilter([]);
     setCurrentPage(1);
   }, []);
 
   const handleStatusFilterRemove = useCallback(() => {
     setStatusFilter(["ACTIVE"]);
-    setCurrentPage(1);
-  }, []);
-
-  const handleChannelFilterRemove = useCallback(() => {
-    setChannelFilter([]);
     setCurrentPage(1);
   }, []);
 
@@ -443,15 +410,6 @@ export default function ProductsPage() {
       filtered = filtered.filter((v) => statusFilter.includes(v.productStatus));
     }
 
-    // Apply channel filter (published on current publication)
-    if (channelFilter.length > 0) {
-      if (channelFilter.includes("published")) {
-        filtered = filtered.filter((v) => v.publishedOnCurrentPublication);
-      } else if (channelFilter.includes("unpublished")) {
-        filtered = filtered.filter((v) => !v.publishedOnCurrentPublication);
-      }
-    }
-
     // Apply search query
     if (queryValue) {
       filtered = filtered.filter(
@@ -508,7 +466,7 @@ export default function ProductsPage() {
     });
 
     return filtered;
-  }, [variants, queryValue, sortColumn, sortDirection, statusFilter, channelFilter]);
+  }, [variants, queryValue, sortColumn, sortDirection, statusFilter]);
 
   // Paginated variants
   const totalPages = Math.ceil(filteredVariants.length / ITEMS_PER_PAGE);
@@ -538,23 +496,6 @@ export default function ProductsPage() {
       ),
       shortcut: true,
     },
-    {
-      key: "channel",
-      label: "Sales Channel",
-      filter: (
-        <ChoiceList
-          title="Sales Channel"
-          titleHidden
-          choices={[
-            { label: "Published", value: "published" },
-            { label: "Unpublished", value: "unpublished" },
-          ]}
-          selected={channelFilter}
-          onChange={handleChannelFilterChange}
-        />
-      ),
-      shortcut: true,
-    },
   ];
 
   // Applied filters for display
@@ -564,13 +505,6 @@ export default function ProductsPage() {
       key: "status",
       label: `Status: ${statusFilter.join(", ")}`,
       onRemove: handleStatusFilterRemove,
-    });
-  }
-  if (channelFilter.length > 0) {
-    appliedFilters.push({
-      key: "channel",
-      label: `Channel: ${channelFilter.join(", ")}`,
-      onRemove: handleChannelFilterRemove,
     });
   }
 
