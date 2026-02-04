@@ -1,6 +1,7 @@
 import { useLoaderData } from "react-router";
 import {
   Page,
+  Card,
   IndexTable,
   IndexFilters,
   useSetIndexFiltersMode,
@@ -8,6 +9,8 @@ import {
   Badge,
   BlockStack,
   ChoiceList,
+  InlineStack,
+  Pagination,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
@@ -17,28 +20,41 @@ import AppNavigation from "../components/AppNavigation";
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
-  // Fetch all products with variants and inventory
-  const productsQuery = `
-    {
-      products(first: 250) {
-        edges {
-          node {
-            id
-            title
-            variants(first: 250) {
-              edges {
-                node {
-                  id
-                  sku
-                  title
-                  inventoryQuantity
-                  metafields(first: 10) {
-                    edges {
-                      node {
-                        id
-                        namespace
-                        key
-                        value
+  // Helper function to fetch all products with pagination
+  async function fetchAllProducts() {
+    let allProducts = [];
+    let hasNextPage = true;
+    let cursor = null;
+
+    while (hasNextPage) {
+      const productsQuery = `
+        query GetProducts($cursor: String) {
+          products(first: 250, after: $cursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            edges {
+              node {
+                id
+                title
+                status
+                variants(first: 250) {
+                  edges {
+                    node {
+                      id
+                      sku
+                      title
+                      inventoryQuantity
+                      metafields(first: 10) {
+                        edges {
+                          node {
+                            id
+                            namespace
+                            key
+                            value
+                          }
+                        }
                       }
                     }
                   }
@@ -47,9 +63,20 @@ export async function loader({ request }) {
             }
           }
         }
-      }
+      `;
+
+      const response = await admin.graphql(productsQuery, {
+        variables: { cursor },
+      });
+      const data = await response.json();
+
+      allProducts = [...allProducts, ...data.data.products.edges];
+      hasNextPage = data.data.products.pageInfo.hasNextPage;
+      cursor = data.data.products.pageInfo.endCursor;
     }
-  `;
+
+    return allProducts;
+  }
 
   // Fetch all suppliers
   const suppliersQuery = `
@@ -69,29 +96,31 @@ export async function loader({ request }) {
     }
   `;
 
-  const [productsResponse, suppliersResponse] = await Promise.all([
-    admin.graphql(productsQuery),
+  const [productEdges, suppliersResponse] = await Promise.all([
+    fetchAllProducts(),
     admin.graphql(suppliersQuery),
   ]);
 
-  const productsData = await productsResponse.json();
   const suppliersData = await suppliersResponse.json();
 
-  // Transform data for easier use
+  // Transform data for easier use - only include ACTIVE products
   const variants = [];
-  productsData.data.products.edges.forEach((productEdge) => {
+  productEdges.forEach((productEdge) => {
     const product = productEdge.node;
-    product.variants.edges.forEach((variantEdge) => {
-      const variant = variantEdge.node;
-      variants.push({
-        id: variant.id,
-        sku: variant.sku,
-        variantTitle: variant.title,
-        productTitle: product.title,
-        inventoryQuantity: variant.inventoryQuantity || 0,
-        metafields: variant.metafields.edges.map((m) => m.node),
+    // Only include active products in the report
+    if (product.status === "ACTIVE") {
+      product.variants.edges.forEach((variantEdge) => {
+        const variant = variantEdge.node;
+        variants.push({
+          id: variant.id,
+          sku: variant.sku,
+          variantTitle: variant.title,
+          productTitle: product.title,
+          inventoryQuantity: variant.inventoryQuantity || 0,
+          metafields: variant.metafields.edges.map((m) => m.node),
+        });
       });
-    });
+    }
   });
 
   const suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
@@ -214,6 +243,10 @@ export default function Report() {
   const [sortDirection, setSortDirection] = useState("ascending");
   const { mode, setMode } = useSetIndexFiltersMode();
 
+  // Pagination state
+  const ITEMS_PER_PAGE = 50;
+  const [currentPage, setCurrentPage] = useState(1);
+
   // Define tabs for risk levels
   const tabs = [
     { id: "all", content: "All", riskValue: null },
@@ -226,6 +259,7 @@ export default function Report() {
 
   const handleTabChange = useCallback((index) => {
     setSelectedTab(index);
+    setCurrentPage(1); // Reset to first page on tab change
     const tab = tabs[index];
     if (tab.riskValue) {
       setRiskFilter([tab.riskValue]);
@@ -323,9 +357,15 @@ export default function Report() {
       return sortDirection === "ascending" ? aVal - bVal : bVal - aVal;
     });
 
-    // Limit to first 50
-    return filtered.slice(0, 50);
+    return filtered;
   }, [variantsWithMetrics, queryValue, riskFilter, sortedColumn, sortDirection]);
+
+  // Paginated variants
+  const totalPages = Math.ceil(filteredVariants.length / ITEMS_PER_PAGE);
+  const paginatedVariants = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    return filteredVariants.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [filteredVariants, currentPage]);
 
   const handleSort = useCallback((index, direction) => {
     const columnMap = [
@@ -339,19 +379,23 @@ export default function Report() {
 
   const handleFiltersQueryChange = useCallback((value) => {
     setQueryValue(value);
+    setCurrentPage(1); // Reset to first page on search
   }, []);
 
   const handleFiltersClearAll = useCallback(() => {
     setQueryValue("");
     setRiskFilter([]);
+    setCurrentPage(1);
   }, []);
 
   const handleRiskFilterChange = useCallback((value) => {
     setRiskFilter(value);
+    setCurrentPage(1);
   }, []);
 
   const handleRiskFilterRemove = useCallback(() => {
     setRiskFilter([]);
+    setCurrentPage(1);
   }, []);
 
   const filters = [
@@ -404,7 +448,10 @@ export default function Report() {
             queryValue={queryValue}
             queryPlaceholder="Search by SKU or Product..."
             onQueryChange={handleFiltersQueryChange}
-            onQueryClear={() => setQueryValue("")}
+            onQueryClear={() => {
+              setQueryValue("");
+              setCurrentPage(1);
+            }}
             filters={filters}
             appliedFilters={appliedFilters}
             onClearAll={handleFiltersClearAll}
@@ -415,80 +462,97 @@ export default function Report() {
             onSelect={handleTabChange}
             canCreateNewView={false}
           />
-          <IndexTable
-            resourceName={{ singular: "product", plural: "products" }}
-            itemCount={filteredVariants.length}
-            headings={[
-              { title: "Risk" },
-              { title: "SKU" },
-              { title: "Product" },
-              { title: "On Hand" },
-              { title: "Daily Demand" },
-              { title: "Threshold" },
-              { title: "Supplier" },
-              { title: "Lead Time" },
-              { title: "Annual Demand" },
-              { title: "Days to Stockout" },
-              { title: "Stockout Date" },
-              { title: "Reorder Point" },
-              { title: "Suggested Order" },
-            ]}
-            selectable={false}
-            sortable={[false, true, true, true, true, true, true, true, true, true, false, true, true]}
-            sortDirection={sortDirection}
-            sortColumnIndex={
-              ["risk", "sku", "product", "onHand", "dailyDemand", "threshold",
-               "supplier", "leadTime", "annualDemand", "daysUntilStockout",
-               "stockoutDate", "reorderPoint", "suggestedOrder"].indexOf(sortedColumn)
-            }
-            onSort={handleSort}
-          >
-            {filteredVariants.map((variant, index) => (
-              <IndexTable.Row id={variant.id} key={variant.id} position={index}>
-                <IndexTable.Cell>
-                  <Badge tone={variant.metrics.riskColor}>
-                    {variant.metrics.riskLevel.split("_").join(" ").toUpperCase()}
-                  </Badge>
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  <Text variant="bodyMd" fontWeight="semibold" as="span">
-                    {variant.sku || "N/A"}
-                  </Text>
-                </IndexTable.Cell>
-                <IndexTable.Cell>{variant.productTitle}</IndexTable.Cell>
-                <IndexTable.Cell>
-                  <Text variant="bodyMd" as="span">
-                    {variant.inventoryQuantity}
-                  </Text>
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  {variant.metrics.dailyDemand.toFixed(2)}
-                </IndexTable.Cell>
-                <IndexTable.Cell>{variant.metrics.threshold}</IndexTable.Cell>
-                <IndexTable.Cell>{variant.metrics.supplierName || "N/A"}</IndexTable.Cell>
-                <IndexTable.Cell>{variant.metrics.leadTime} days</IndexTable.Cell>
-                <IndexTable.Cell>
-                  {Math.round(variant.metrics.annualizedDemand)}
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  {variant.metrics.daysUntilStockout >= 0
-                    ? variant.metrics.daysUntilStockout
-                    : "OUT"}
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  {variant.metrics.stockoutDate.toLocaleDateString()}
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  {Math.round(variant.metrics.reorderPoint)}
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  <Text variant="bodyMd" fontWeight="semibold" as="span">
-                    {Math.round(variant.metrics.suggestedOrderSize)}
-                  </Text>
-                </IndexTable.Cell>
-              </IndexTable.Row>
-            ))}
-          </IndexTable>
+          <Card padding="0">
+            <IndexTable
+              resourceName={{ singular: "product", plural: "products" }}
+              itemCount={filteredVariants.length}
+              headings={[
+                { title: "Risk" },
+                { title: "SKU" },
+                { title: "Product" },
+                { title: "On Hand" },
+                { title: "Daily Demand" },
+                { title: "Threshold" },
+                { title: "Supplier" },
+                { title: "Lead Time" },
+                { title: "Annual Demand" },
+                { title: "Days to Stockout" },
+                { title: "Stockout Date" },
+                { title: "Reorder Point" },
+                { title: "Suggested Order" },
+              ]}
+              selectable={false}
+              sortable={[false, true, true, true, true, true, true, true, true, true, false, true, true]}
+              sortDirection={sortDirection}
+              sortColumnIndex={
+                ["risk", "sku", "product", "onHand", "dailyDemand", "threshold",
+                 "supplier", "leadTime", "annualDemand", "daysUntilStockout",
+                 "stockoutDate", "reorderPoint", "suggestedOrder"].indexOf(sortedColumn)
+              }
+              onSort={handleSort}
+            >
+              {paginatedVariants.map((variant, index) => (
+                <IndexTable.Row id={variant.id} key={variant.id} position={index}>
+                  <IndexTable.Cell>
+                    <Badge tone={variant.metrics.riskColor}>
+                      {variant.metrics.riskLevel.split("_").join(" ").toUpperCase()}
+                    </Badge>
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    <Text variant="bodyMd" fontWeight="semibold" as="span">
+                      {variant.sku || "N/A"}
+                    </Text>
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>{variant.productTitle}</IndexTable.Cell>
+                  <IndexTable.Cell>
+                    <Text variant="bodyMd" as="span">
+                      {variant.inventoryQuantity}
+                    </Text>
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    {variant.metrics.dailyDemand.toFixed(2)}
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>{variant.metrics.threshold}</IndexTable.Cell>
+                  <IndexTable.Cell>{variant.metrics.supplierName || "N/A"}</IndexTable.Cell>
+                  <IndexTable.Cell>{variant.metrics.leadTime} days</IndexTable.Cell>
+                  <IndexTable.Cell>
+                    {Math.round(variant.metrics.annualizedDemand)}
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    {variant.metrics.daysUntilStockout >= 0
+                      ? variant.metrics.daysUntilStockout
+                      : "OUT"}
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    {variant.metrics.stockoutDate.toLocaleDateString()}
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    {Math.round(variant.metrics.reorderPoint)}
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    <Text variant="bodyMd" fontWeight="semibold" as="span">
+                      {Math.round(variant.metrics.suggestedOrderSize)}
+                    </Text>
+                  </IndexTable.Cell>
+                </IndexTable.Row>
+              ))}
+            </IndexTable>
+          </Card>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <InlineStack align="center" gap="400">
+              <Text variant="bodySm" as="span" tone="subdued">
+                Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredVariants.length)} of {filteredVariants.length} variants
+              </Text>
+              <Pagination
+                hasPrevious={currentPage > 1}
+                hasNext={currentPage < totalPages}
+                onPrevious={() => setCurrentPage(currentPage - 1)}
+                onNext={() => setCurrentPage(currentPage + 1)}
+              />
+            </InlineStack>
+          )}
         </BlockStack>
       </Page>
     </>
