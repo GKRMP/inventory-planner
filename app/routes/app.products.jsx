@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
-import { useLoaderData, useRevalidator, useFetcher } from "react-router";
+import { useRevalidator } from "react-router";
 import {
   Page,
   Card,
@@ -15,7 +15,6 @@ import {
   Select,
   InlineStack,
   Checkbox,
-  Divider,
   ChoiceList,
   Pagination,
   Badge,
@@ -23,224 +22,12 @@ import {
   ProgressBar,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
 import AppNavigation from "../components/AppNavigation";
-
-export async function loader({ request }) {
-  const { admin } = await authenticate.admin(request);
-
-  try {
-    // Fetch first page of products quickly for initial display
-    const productsQuery = `
-      {
-        products(first: 50, query: "status:ACTIVE") {
-          pageInfo {
-            hasNextPage
-          }
-          edges {
-            node {
-              id
-              title
-              status
-              variants(first: 100) {
-                edges {
-                  node {
-                    id
-                    sku
-                    title
-                    inventoryQuantity
-                    metafields(first: 10) {
-                      edges {
-                        node {
-                          id
-                          namespace
-                          key
-                          value
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    `;
-
-    // Fetch suppliers
-    const suppliersQuery = `
-      {
-        metaobjects(type: "supplier", first: 250) {
-          edges {
-            node {
-              id
-              handle
-              fields {
-                key
-                value
-              }
-            }
-          }
-        }
-      }
-    `;
-
-    const [productsResponse, suppliersResponse] = await Promise.all([
-      admin.graphql(productsQuery),
-      admin.graphql(suppliersQuery),
-    ]);
-
-    const productsData = await productsResponse.json();
-    const suppliersData = await suppliersResponse.json();
-
-    if (productsData.errors) {
-      console.error("Products GraphQL errors:", productsData.errors);
-      return { variants: [], suppliers: [], hasMoreProducts: false };
-    }
-
-    if (!suppliersData.data || !suppliersData.data.metaobjects) {
-      console.error("Suppliers response error:", suppliersData);
-      return { variants: [], suppliers: [], hasMoreProducts: false };
-    }
-
-    // Transform data
-    const variants = [];
-    const productEdges = productsData.data?.products?.edges || [];
-    productEdges.forEach((productEdge) => {
-      const product = productEdge.node;
-      product.variants.edges.forEach((variantEdge) => {
-        const variant = variantEdge.node;
-        variants.push({
-          id: variant.id,
-          sku: variant.sku,
-          variantTitle: variant.title,
-          productTitle: product.title,
-          productStatus: product.status || "ACTIVE",
-          inventoryQuantity: variant.inventoryQuantity || 0,
-          metafields: variant.metafields.edges.map((m) => m.node),
-        });
-      });
-    });
-
-    const suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
-    const hasMoreProducts = productsData.data?.products?.pageInfo?.hasNextPage || false;
-
-    return { variants, suppliers, hasMoreProducts };
-  } catch (error) {
-    console.error("Products loader error:", error);
-    return { variants: [], suppliers: [], hasMoreProducts: false };
-  }
-}
-
-export async function action({ request }) {
-  const { admin } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const intent = formData.get("intent");
-
-  if (intent === "loadAllProducts") {
-    const statusFilter = formData.get("statusFilter") || "ACTIVE";
-
-    // Fetch ALL products with pagination
-    let allVariants = [];
-    let hasNextPage = true;
-    let cursor = null;
-    let pageCount = 0;
-    const maxPages = 50;
-
-    // Build query filter
-    const queryFilter = statusFilter ? `status:${statusFilter}` : "";
-
-    while (hasNextPage && pageCount < maxPages) {
-      try {
-        const productsQuery = `
-          query GetProducts($cursor: String, $query: String) {
-            products(first: 250, after: $cursor, query: $query) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              edges {
-                node {
-                  id
-                  title
-                  status
-                  variants(first: 100) {
-                    edges {
-                      node {
-                        id
-                        sku
-                        title
-                        inventoryQuantity
-                        metafields(first: 10) {
-                          edges {
-                            node {
-                              id
-                              namespace
-                              key
-                              value
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        `;
-
-        const response = await admin.graphql(productsQuery, {
-          variables: { cursor, query: queryFilter },
-        });
-        const data = await response.json();
-
-        if (data.errors || !data.data?.products) {
-          break;
-        }
-
-        data.data.products.edges.forEach((productEdge) => {
-          const product = productEdge.node;
-          product.variants.edges.forEach((variantEdge) => {
-            const variant = variantEdge.node;
-            allVariants.push({
-              id: variant.id,
-              sku: variant.sku,
-              variantTitle: variant.title,
-              productTitle: product.title,
-              productStatus: product.status || "ACTIVE",
-              inventoryQuantity: variant.inventoryQuantity || 0,
-              metafields: variant.metafields.edges.map((m) => m.node),
-            });
-          });
-        });
-
-        hasNextPage = data.data.products.pageInfo.hasNextPage;
-        cursor = data.data.products.pageInfo.endCursor;
-        pageCount++;
-      } catch (error) {
-        console.error("Error fetching products page:", error);
-        break;
-      }
-    }
-
-    return { variants: allVariants, isComplete: true };
-  }
-
-  return { error: "Unknown intent" };
-}
+import { useProducts } from "../context/ProductsContext";
 
 export default function ProductsPage() {
-  const loaderData = useLoaderData();
+  const { variants, suppliers, isComplete, isLoading, loadAllProducts, hasMoreProducts } = useProducts();
   const revalidator = useRevalidator();
-  const fetcher = useFetcher();
-
-  // Use fetcher data if available (full data), otherwise use loader data (partial)
-  const variants = fetcher.data?.variants || loaderData.variants;
-  const suppliers = loaderData.suppliers;
-  const isPartialData = fetcher.data?.isComplete ? false : loaderData.hasMoreProducts;
-  const isLoading = fetcher.state === "submitting" || fetcher.state === "loading";
 
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedVariant, setSelectedVariant] = useState(null);
@@ -272,10 +59,10 @@ export default function ProductsPage() {
   const [statusFilter, setStatusFilter] = useState(["ACTIVE"]);
 
   // Load all products
-  const loadAllData = useCallback(() => {
+  const handleLoadAll = useCallback(() => {
     const status = statusFilter.length > 0 ? statusFilter[0] : "ACTIVE";
-    fetcher.submit({ intent: "loadAllProducts", statusFilter: status }, { method: "post" });
-  }, [fetcher, statusFilter]);
+    loadAllProducts(status);
+  }, [loadAllProducts, statusFilter]);
 
   // Client-side search filter
   const handleFiltersQueryChange = useCallback((value) => {
@@ -283,16 +70,11 @@ export default function ProductsPage() {
     setCurrentPage(1);
   }, []);
 
-  // Status filter change - triggers reload of all products with new filter
+  // Status filter change
   const handleStatusFilterChange = useCallback((value) => {
     setStatusFilter(value);
     setCurrentPage(1);
-    // If we have complete data loaded, reload with new status filter
-    if (fetcher.data?.isComplete) {
-      const status = value.length > 0 ? value[0] : "ACTIVE";
-      fetcher.submit({ intent: "loadAllProducts", statusFilter: status }, { method: "post" });
-    }
-  }, [fetcher]);
+  }, []);
 
   const handleFiltersClearAll = useCallback(() => {
     setQueryValue("");
@@ -469,7 +251,7 @@ export default function ProductsPage() {
   };
 
   // Helper to get supplier name(s) from variant
-  const getSupplierName = (variant) => {
+  const getSupplierName = useCallback((variant) => {
     const metafield = variant.metafields.find(
       (m) => m.namespace === "inventory" && m.key === "supplier_data"
     );
@@ -502,7 +284,7 @@ export default function ProductsPage() {
     } catch (e) {
       return "N/A";
     }
-  };
+  }, [suppliers]);
 
   const getSupplierNameById = (supplierId) => {
     const supplier = suppliers.find((s) =>
@@ -517,8 +299,8 @@ export default function ProductsPage() {
   const filteredAndSortedVariants = useMemo(() => {
     let filtered = [...variants];
 
-    // Apply status filter (client-side when we have partial data)
-    if (statusFilter.length > 0 && !fetcher.data?.isComplete) {
+    // Apply status filter
+    if (statusFilter.length > 0) {
       filtered = filtered.filter((v) => statusFilter.includes(v.productStatus));
     }
 
@@ -570,7 +352,7 @@ export default function ProductsPage() {
     });
 
     return filtered;
-  }, [variants, queryValue, statusFilter, sortColumn, sortDirection, fetcher.data?.isComplete]);
+  }, [variants, queryValue, statusFilter, sortColumn, sortDirection, getSupplierName]);
 
   // Client-side pagination
   const totalPages = Math.ceil(filteredAndSortedVariants.length / ITEMS_PER_PAGE);
@@ -618,11 +400,11 @@ export default function ProductsPage() {
         <BlockStack gap="400">
           <AppNavigation />
 
-          {isPartialData && !isLoading && (
+          {hasMoreProducts && !isLoading && (
             <Banner
               title="Showing partial data"
               tone="warning"
-              action={{ content: "Load All Products", onAction: loadAllData }}
+              action={{ content: "Load All Products", onAction: handleLoadAll }}
             >
               <p>Only showing the first 50 products. Click "Load All Products" to enable sorting and filtering across all products.</p>
             </Banner>
@@ -721,7 +503,7 @@ export default function ProductsPage() {
           {totalPages > 1 && (
             <InlineStack align="center" gap="400">
               <Text variant="bodySm" as="span" tone="subdued">
-                Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredAndSortedVariants.length)} of {filteredAndSortedVariants.length} variants{isPartialData ? "*" : ""}
+                Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredAndSortedVariants.length)} of {filteredAndSortedVariants.length} variants{hasMoreProducts ? "*" : ""}
               </Text>
               <Pagination
                 hasPrevious={currentPage > 1}
@@ -735,7 +517,7 @@ export default function ProductsPage() {
           {totalPages <= 1 && filteredAndSortedVariants.length > 0 && (
             <InlineStack align="center">
               <Text variant="bodySm" as="span" tone="subdued">
-                Showing {filteredAndSortedVariants.length} variants{isPartialData ? "*" : ""}
+                Showing {filteredAndSortedVariants.length} variants{hasMoreProducts ? "*" : ""}
               </Text>
             </InlineStack>
           )}

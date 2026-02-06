@@ -1,209 +1,17 @@
-import { useLoaderData, useFetcher } from "react-router";
 import {
   Page,
   Card,
   Text,
   BlockStack,
   InlineStack,
-  Button,
   Banner,
   ProgressBar,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
 import { useMemo, useCallback } from "react";
 import { ResponsiveBar } from "@nivo/bar";
 import AppNavigation from "../components/AppNavigation";
-
-export async function loader({ request }) {
-  const { admin } = await authenticate.admin(request);
-
-  try {
-    // Fetch first page of products quickly for initial display
-    const productsQuery = `
-      {
-        products(first: 50, query: "status:ACTIVE") {
-          pageInfo {
-            hasNextPage
-          }
-          edges {
-            node {
-              id
-              title
-              variants(first: 100) {
-                edges {
-                  node {
-                    id
-                    sku
-                    title
-                    inventoryQuantity
-                    metafields(first: 10) {
-                      edges {
-                        node {
-                          id
-                          namespace
-                          key
-                          value
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    `;
-
-    // Fetch all suppliers
-    const suppliersQuery = `
-      {
-        metaobjects(type: "supplier", first: 250) {
-          edges {
-            node {
-              id
-              handle
-              fields {
-                key
-                value
-              }
-            }
-          }
-        }
-      }
-    `;
-
-    const [productsResponse, suppliersResponse] = await Promise.all([
-      admin.graphql(productsQuery),
-      admin.graphql(suppliersQuery),
-    ]);
-
-    const productsData = await productsResponse.json();
-    const suppliersData = await suppliersResponse.json();
-
-    if (!productsData.data || !suppliersData.data) {
-      console.error("API Response error:", { productsData, suppliersData });
-      return { variants: [], suppliers: [], hasMoreProducts: false };
-    }
-
-    // Transform data for easier use
-    const variants = [];
-    productsData.data.products.edges.forEach((productEdge) => {
-      const product = productEdge.node;
-      product.variants.edges.forEach((variantEdge) => {
-        const variant = variantEdge.node;
-        variants.push({
-          id: variant.id,
-          sku: variant.sku,
-          variantTitle: variant.title,
-          productTitle: product.title,
-          inventoryQuantity: variant.inventoryQuantity || 0,
-          metafields: variant.metafields.edges.map((m) => m.node),
-        });
-      });
-    });
-
-    const suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
-    const hasMoreProducts = productsData.data.products.pageInfo?.hasNextPage || false;
-
-    return { variants, suppliers, hasMoreProducts };
-  } catch (error) {
-    console.error("Dashboard loader error:", error);
-    return { variants: [], suppliers: [], hasMoreProducts: false };
-  }
-}
-
-export async function action({ request }) {
-  const { admin } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const intent = formData.get("intent");
-
-  if (intent === "loadAllProducts") {
-    // Fetch ALL products with pagination
-    let allVariants = [];
-    let hasNextPage = true;
-    let cursor = null;
-    let pageCount = 0;
-    const maxPages = 50;
-
-    while (hasNextPage && pageCount < maxPages) {
-      try {
-        const productsQuery = `
-          query GetProducts($cursor: String) {
-            products(first: 250, after: $cursor, query: "status:ACTIVE") {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              edges {
-                node {
-                  id
-                  title
-                  variants(first: 100) {
-                    edges {
-                      node {
-                        id
-                        sku
-                        title
-                        inventoryQuantity
-                        metafields(first: 10) {
-                          edges {
-                            node {
-                              id
-                              namespace
-                              key
-                              value
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        `;
-
-        const response = await admin.graphql(productsQuery, {
-          variables: { cursor },
-        });
-        const data = await response.json();
-
-        if (data.errors || !data.data?.products) {
-          break;
-        }
-
-        data.data.products.edges.forEach((productEdge) => {
-          const product = productEdge.node;
-          product.variants.edges.forEach((variantEdge) => {
-            const variant = variantEdge.node;
-            allVariants.push({
-              id: variant.id,
-              sku: variant.sku,
-              variantTitle: variant.title,
-              productTitle: product.title,
-              inventoryQuantity: variant.inventoryQuantity || 0,
-              metafields: variant.metafields.edges.map((m) => m.node),
-            });
-          });
-        });
-
-        hasNextPage = data.data.products.pageInfo.hasNextPage;
-        cursor = data.data.products.pageInfo.endCursor;
-        pageCount++;
-      } catch (error) {
-        console.error("Error fetching products page:", error);
-        break;
-      }
-    }
-
-    return { variants: allVariants, isComplete: true };
-  }
-
-  return { error: "Unknown intent" };
-}
+import { useProducts } from "../context/ProductsContext";
 
 // Helper function to get metafield value
 function getMetafieldValue(metafields, namespace, key) {
@@ -264,18 +72,11 @@ function calculateMetrics(variant, suppliers) {
 }
 
 export default function Dashboard() {
-  const loaderData = useLoaderData();
-  const fetcher = useFetcher();
+  const { variants, suppliers, isComplete, isLoading, loadAllProducts, hasMoreProducts } = useProducts();
 
-  // Use fetcher data if available (full data), otherwise use loader data (partial)
-  const variants = fetcher.data?.variants || loaderData.variants;
-  const suppliers = loaderData.suppliers;
-  const isPartialData = fetcher.data?.isComplete ? false : loaderData.hasMoreProducts;
-  const isLoading = fetcher.state === "submitting" || fetcher.state === "loading";
-
-  const loadAllData = useCallback(() => {
-    fetcher.submit({ intent: "loadAllProducts" }, { method: "post" });
-  }, [fetcher]);
+  const handleLoadAll = useCallback(() => {
+    loadAllProducts("ACTIVE");
+  }, [loadAllProducts]);
 
   // Calculate risk distribution
   const riskStats = useMemo(() => {
@@ -330,11 +131,11 @@ export default function Dashboard() {
         <BlockStack gap="400">
           <AppNavigation />
 
-          {isPartialData && !isLoading && (
+          {hasMoreProducts && !isLoading && (
             <Banner
               title="Showing partial data"
               tone="warning"
-              action={{ content: "Load All Products", onAction: loadAllData }}
+              action={{ content: "Load All Products", onAction: handleLoadAll }}
             >
               <p>Statistics are based on the first 50 products. Click "Load All Products" to see the complete inventory risk overview.</p>
             </Banner>
@@ -357,7 +158,7 @@ export default function Dashboard() {
                     Inventory Risk Overview
                   </Text>
                   <Text variant="bodyMd" as="p" tone="subdued">
-                    {totalVariants} total products{isPartialData ? "*" : ""}
+                    {totalVariants} total products{hasMoreProducts ? "*" : ""}
                   </Text>
                 </InlineStack>
 
