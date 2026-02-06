@@ -1,4 +1,4 @@
-import { useLoaderData, useNavigate } from "react-router";
+import { useLoaderData, useNavigate, useFetcher } from "react-router";
 import {
   Page,
   Card,
@@ -11,6 +11,8 @@ import {
   ChoiceList,
   InlineStack,
   Pagination,
+  Banner,
+  ProgressBar,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
@@ -21,59 +23,12 @@ export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
 
   try {
-    // Get URL params for pagination
-    const url = new URL(request.url);
-    const cursor = url.searchParams.get("cursor");
-    const direction = url.searchParams.get("direction") || "forward";
-    const riskFilter = url.searchParams.get("risk") || "";
-
-    // Fetch one page of products (50 products at a time for speed)
-    const productsQuery = direction === "backward" ? `
-      query GetProducts($cursor: String) {
-        products(last: 50, before: $cursor, query: "status:ACTIVE") {
+    // Fetch first page of products quickly for initial display
+    const productsQuery = `
+      {
+        products(first: 50, query: "status:ACTIVE") {
           pageInfo {
             hasNextPage
-            hasPreviousPage
-            startCursor
-            endCursor
-          }
-          edges {
-            node {
-              id
-              title
-              status
-              variants(first: 100) {
-                edges {
-                  node {
-                    id
-                    sku
-                    title
-                    inventoryQuantity
-                    metafields(first: 10) {
-                      edges {
-                        node {
-                          id
-                          namespace
-                          key
-                          value
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    ` : `
-      query GetProducts($cursor: String) {
-        products(first: 50, after: $cursor, query: "status:ACTIVE") {
-          pageInfo {
-            hasNextPage
-            hasPreviousPage
-            startCursor
-            endCursor
           }
           edges {
             node {
@@ -125,9 +80,7 @@ export async function loader({ request }) {
     `;
 
     const [productsResponse, suppliersResponse] = await Promise.all([
-      admin.graphql(productsQuery, {
-        variables: { cursor },
-      }),
+      admin.graphql(productsQuery),
       admin.graphql(suppliersQuery),
     ]);
 
@@ -136,12 +89,12 @@ export async function loader({ request }) {
 
     if (productsData.errors) {
       console.error("Products GraphQL errors:", productsData.errors);
-      return { variants: [], suppliers: [], pageInfo: null, currentRisk: riskFilter };
+      return { variants: [], suppliers: [], hasMoreProducts: false };
     }
 
     if (!suppliersData.data || !suppliersData.data.metaobjects) {
       console.error("Suppliers response error:", suppliersData);
-      return { variants: [], suppliers: [], pageInfo: null, currentRisk: riskFilter };
+      return { variants: [], suppliers: [], hasMoreProducts: false };
     }
 
     // Transform data for easier use
@@ -163,13 +116,104 @@ export async function loader({ request }) {
     });
 
     const suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
-    const pageInfo = productsData.data?.products?.pageInfo || null;
+    const hasMoreProducts = productsData.data?.products?.pageInfo?.hasNextPage || false;
 
-    return { variants, suppliers, pageInfo, currentRisk: riskFilter };
+    return { variants, suppliers, hasMoreProducts };
   } catch (error) {
     console.error("Report loader error:", error);
-    return { variants: [], suppliers: [], pageInfo: null, currentRisk: "" };
+    return { variants: [], suppliers: [], hasMoreProducts: false };
   }
+}
+
+export async function action({ request }) {
+  const { admin } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const intent = formData.get("intent");
+
+  if (intent === "loadAllProducts") {
+    // Fetch ALL products with pagination
+    let allVariants = [];
+    let hasNextPage = true;
+    let cursor = null;
+    let pageCount = 0;
+    const maxPages = 50;
+
+    while (hasNextPage && pageCount < maxPages) {
+      try {
+        const productsQuery = `
+          query GetProducts($cursor: String) {
+            products(first: 250, after: $cursor, query: "status:ACTIVE") {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              edges {
+                node {
+                  id
+                  title
+                  variants(first: 100) {
+                    edges {
+                      node {
+                        id
+                        sku
+                        title
+                        inventoryQuantity
+                        metafields(first: 10) {
+                          edges {
+                            node {
+                              id
+                              namespace
+                              key
+                              value
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        `;
+
+        const response = await admin.graphql(productsQuery, {
+          variables: { cursor },
+        });
+        const data = await response.json();
+
+        if (data.errors || !data.data?.products) {
+          break;
+        }
+
+        data.data.products.edges.forEach((productEdge) => {
+          const product = productEdge.node;
+          product.variants.edges.forEach((variantEdge) => {
+            const variant = variantEdge.node;
+            allVariants.push({
+              id: variant.id,
+              sku: variant.sku,
+              variantTitle: variant.title,
+              productTitle: product.title,
+              inventoryQuantity: variant.inventoryQuantity || 0,
+              metafields: variant.metafields.edges.map((m) => m.node),
+            });
+          });
+        });
+
+        hasNextPage = data.data.products.pageInfo.hasNextPage;
+        cursor = data.data.products.pageInfo.endCursor;
+        pageCount++;
+      } catch (error) {
+        console.error("Error fetching products page:", error);
+        break;
+      }
+    }
+
+    return { variants: allVariants, isComplete: true };
+  }
+
+  return { error: "Unknown intent" };
 }
 
 // Helper function to get metafield value
@@ -279,14 +323,28 @@ function calculateMetrics(variant, suppliers) {
 }
 
 export default function Report() {
-  const { variants, suppliers, pageInfo, currentRisk } = useLoaderData();
-  const navigate = useNavigate();
+  const loaderData = useLoaderData();
+  const fetcher = useFetcher();
   const [queryValue, setQueryValue] = useState("");
-  const [riskFilter, setRiskFilter] = useState(currentRisk ? [currentRisk] : []);
+  const [riskFilter, setRiskFilter] = useState([]);
   const [selectedTab, setSelectedTab] = useState(0);
   const [sortedColumn, setSortedColumn] = useState("daysUntilStockout");
   const [sortDirection, setSortDirection] = useState("ascending");
   const { mode, setMode } = useSetIndexFiltersMode();
+
+  // Pagination state for client-side pagination
+  const ITEMS_PER_PAGE = 50;
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Use fetcher data if available (full data), otherwise use loader data (partial)
+  const variants = fetcher.data?.variants || loaderData.variants;
+  const suppliers = loaderData.suppliers;
+  const isPartialData = fetcher.data?.isComplete ? false : loaderData.hasMoreProducts;
+  const isLoading = fetcher.state === "submitting" || fetcher.state === "loading";
+
+  const loadAllData = useCallback(() => {
+    fetcher.submit({ intent: "loadAllProducts" }, { method: "post" });
+  }, [fetcher]);
 
   // Define tabs for risk levels
   const tabs = [
@@ -300,6 +358,7 @@ export default function Report() {
 
   const handleTabChange = useCallback((index) => {
     setSelectedTab(index);
+    setCurrentPage(1);
     const tab = tabs[index];
     if (tab.riskValue) {
       setRiskFilter([tab.riskValue]);
@@ -307,29 +366,6 @@ export default function Report() {
       setRiskFilter([]);
     }
   }, []);
-
-  // Server-side pagination handlers
-  const handleNextPage = useCallback(() => {
-    if (pageInfo?.hasNextPage && pageInfo?.endCursor) {
-      const risk = riskFilter.length > 0 ? riskFilter[0] : "";
-      const params = new URLSearchParams();
-      params.set("cursor", pageInfo.endCursor);
-      params.set("direction", "forward");
-      if (risk) params.set("risk", risk);
-      navigate(`/app/report?${params.toString()}`);
-    }
-  }, [pageInfo, riskFilter, navigate]);
-
-  const handlePreviousPage = useCallback(() => {
-    if (pageInfo?.hasPreviousPage && pageInfo?.startCursor) {
-      const risk = riskFilter.length > 0 ? riskFilter[0] : "";
-      const params = new URLSearchParams();
-      params.set("cursor", pageInfo.startCursor);
-      params.set("direction", "backward");
-      if (risk) params.set("risk", risk);
-      navigate(`/app/report?${params.toString()}`);
-    }
-  }, [pageInfo, riskFilter, navigate]);
 
   // Calculate metrics for all variants
   const variantsWithMetrics = useMemo(() => {
@@ -339,11 +375,11 @@ export default function Report() {
     }));
   }, [variants, suppliers]);
 
-  // Filter and sort (client-side on current page)
-  const displayedVariants = useMemo(() => {
-    let filtered = variantsWithMetrics;
+  // Filter and sort ALL variants (full dataset)
+  const filteredAndSortedVariants = useMemo(() => {
+    let filtered = [...variantsWithMetrics];
 
-    // Search filter (client-side)
+    // Search filter
     if (queryValue) {
       filtered = filtered.filter(
         (v) =>
@@ -352,7 +388,7 @@ export default function Report() {
       );
     }
 
-    // Risk filter (client-side on current page)
+    // Risk filter
     if (riskFilter.length > 0) {
       filtered = filtered.filter((v) => riskFilter.includes(v.metrics.riskLevel));
     }
@@ -422,6 +458,13 @@ export default function Report() {
     return filtered;
   }, [variantsWithMetrics, queryValue, riskFilter, sortedColumn, sortDirection]);
 
+  // Client-side pagination
+  const totalPages = Math.ceil(filteredAndSortedVariants.length / ITEMS_PER_PAGE);
+  const paginatedVariants = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    return filteredAndSortedVariants.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [filteredAndSortedVariants, currentPage]);
+
   const handleSort = useCallback((index, direction) => {
     const columnMap = [
       "risk", "sku", "product", "onHand", "dailyDemand", "threshold",
@@ -430,23 +473,28 @@ export default function Report() {
     ];
     setSortedColumn(columnMap[index]);
     setSortDirection(direction);
+    setCurrentPage(1);
   }, []);
 
   const handleFiltersQueryChange = useCallback((value) => {
     setQueryValue(value);
+    setCurrentPage(1);
   }, []);
 
   const handleFiltersClearAll = useCallback(() => {
     setQueryValue("");
     setRiskFilter([]);
+    setCurrentPage(1);
   }, []);
 
   const handleRiskFilterChange = useCallback((value) => {
     setRiskFilter(value);
+    setCurrentPage(1);
   }, []);
 
   const handleRiskFilterRemove = useCallback(() => {
     setRiskFilter([]);
+    setCurrentPage(1);
   }, []);
 
   const filters = [
@@ -495,11 +543,34 @@ export default function Report() {
       <Page fullWidth>
         <BlockStack gap="400">
           <AppNavigation />
+
+          {isPartialData && !isLoading && (
+            <Banner
+              title="Showing partial data"
+              tone="warning"
+              action={{ content: "Load All Products", onAction: loadAllData }}
+            >
+              <p>Only showing the first 50 products. Click "Load All Products" to enable sorting and filtering across all products.</p>
+            </Banner>
+          )}
+
+          {isLoading && (
+            <Card>
+              <BlockStack gap="200">
+                <Text variant="bodyMd">Loading all products...</Text>
+                <ProgressBar progress={75} tone="primary" />
+              </BlockStack>
+            </Card>
+          )}
+
           <IndexFilters
             queryValue={queryValue}
             queryPlaceholder="Search by SKU or Product..."
             onQueryChange={handleFiltersQueryChange}
-            onQueryClear={() => setQueryValue("")}
+            onQueryClear={() => {
+              setQueryValue("");
+              setCurrentPage(1);
+            }}
             filters={filters}
             appliedFilters={appliedFilters}
             onClearAll={handleFiltersClearAll}
@@ -513,7 +584,7 @@ export default function Report() {
           <Card padding="0">
             <IndexTable
               resourceName={{ singular: "product", plural: "products" }}
-              itemCount={displayedVariants.length}
+              itemCount={filteredAndSortedVariants.length}
               headings={[
                 { title: "Risk" },
                 { title: "SKU" },
@@ -539,7 +610,7 @@ export default function Report() {
               }
               onSort={handleSort}
             >
-              {displayedVariants.map((variant, index) => (
+              {paginatedVariants.map((variant, index) => (
                 <IndexTable.Row id={variant.id} key={variant.id} position={index}>
                   <IndexTable.Cell>
                     <Badge tone={variant.metrics.riskColor}>
@@ -587,18 +658,26 @@ export default function Report() {
             </IndexTable>
           </Card>
 
-          {/* Server-side Pagination */}
-          {pageInfo && (pageInfo.hasPreviousPage || pageInfo.hasNextPage) && (
+          {/* Client-side Pagination */}
+          {totalPages > 1 && (
             <InlineStack align="center" gap="400">
               <Text variant="bodySm" as="span" tone="subdued">
-                Showing {displayedVariants.length} variants on this page
+                Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredAndSortedVariants.length)} of {filteredAndSortedVariants.length} products{isPartialData ? "*" : ""}
               </Text>
               <Pagination
-                hasPrevious={pageInfo.hasPreviousPage}
-                hasNext={pageInfo.hasNextPage}
-                onPrevious={handlePreviousPage}
-                onNext={handleNextPage}
+                hasPrevious={currentPage > 1}
+                hasNext={currentPage < totalPages}
+                onPrevious={() => setCurrentPage(currentPage - 1)}
+                onNext={() => setCurrentPage(currentPage + 1)}
               />
+            </InlineStack>
+          )}
+
+          {totalPages <= 1 && filteredAndSortedVariants.length > 0 && (
+            <InlineStack align="center">
+              <Text variant="bodySm" as="span" tone="subdued">
+                Showing {filteredAndSortedVariants.length} products{isPartialData ? "*" : ""}
+              </Text>
             </InlineStack>
           )}
         </BlockStack>
