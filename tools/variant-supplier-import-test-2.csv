@@ -1,0 +1,3 @@
+﻿SKU,SupplierID,MPN,IsPrimary,LeadTime,Threshold,DailyDemand,LastOrderDate,LastOrderCPU,LastOrderQty,Notes
+T99A,1003,T99A,Y,7,,0.018163369,3/14/2022,150,5,Look up Cost - $150?
+T99A,1002,T99A,N,7,,0.018163369,3/14/2022,150,5,Look up Cost - $150?

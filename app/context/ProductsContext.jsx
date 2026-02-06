@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect } from "react";
+import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 import { useFetcher } from "react-router";
 
 const ProductsContext = createContext(null);
@@ -8,6 +8,7 @@ export function ProductsProvider({ children, initialVariants = [], initialSuppli
   const [variants, setVariants] = useState(initialVariants);
   const [suppliers] = useState(initialSuppliers);
   const [isComplete, setIsComplete] = useState(!hasMoreProducts);
+  const hasStartedAutoLoad = useRef(false);
 
   // Update variants when fetcher completes
   useEffect(() => {
@@ -16,6 +17,21 @@ export function ProductsProvider({ children, initialVariants = [], initialSuppli
       setIsComplete(fetcher.data.isComplete || false);
     }
   }, [fetcher.data, fetcher.state]);
+
+  // Auto-load all products in background when app starts
+  useEffect(() => {
+    if (hasMoreProducts && !hasStartedAutoLoad.current && fetcher.state === "idle") {
+      hasStartedAutoLoad.current = true;
+      // Small delay to let the page render first
+      const timer = setTimeout(() => {
+        fetcher.submit(
+          { intent: "loadAllProducts", statusFilter: "ACTIVE" },
+          { method: "post", action: "/api/products-loader" }
+        );
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [hasMoreProducts, fetcher]);
 
   const isLoading = fetcher.state === "submitting" || fetcher.state === "loading";
 
@@ -29,6 +45,7 @@ export function ProductsProvider({ children, initialVariants = [], initialSuppli
 
   const refreshProducts = useCallback((statusFilter = "ACTIVE") => {
     setIsComplete(false);
+    hasStartedAutoLoad.current = false;
     fetcher.submit(
       { intent: "loadAllProducts", statusFilter },
       { method: "post", action: "/api/products-loader" }

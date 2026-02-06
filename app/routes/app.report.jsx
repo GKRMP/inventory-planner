@@ -10,12 +10,11 @@ import {
   ChoiceList,
   InlineStack,
   Pagination,
-  Banner,
-  ProgressBar,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { useState, useMemo, useCallback } from "react";
 import AppNavigation from "../components/AppNavigation";
+import ProductsLoadingIndicator from "../components/ProductsLoadingIndicator";
 import { useProducts } from "../context/ProductsContext";
 
 // Helper function to get metafield value
@@ -125,7 +124,7 @@ function calculateMetrics(variant, suppliers) {
 }
 
 export default function Report() {
-  const { variants, suppliers, isComplete, isLoading, loadAllProducts, hasMoreProducts } = useProducts();
+  const { variants, suppliers, isLoading } = useProducts();
   const [queryValue, setQueryValue] = useState("");
   const [riskFilter, setRiskFilter] = useState([]);
   const [selectedTab, setSelectedTab] = useState(0);
@@ -136,10 +135,6 @@ export default function Report() {
   // Pagination state for client-side pagination
   const ITEMS_PER_PAGE = 50;
   const [currentPage, setCurrentPage] = useState(1);
-
-  const handleLoadAll = useCallback(() => {
-    loadAllProducts("ACTIVE");
-  }, [loadAllProducts]);
 
   // Define tabs for risk levels
   const tabs = [
@@ -339,25 +334,6 @@ export default function Report() {
         <BlockStack gap="400">
           <AppNavigation />
 
-          {hasMoreProducts && !isLoading && (
-            <Banner
-              title="Showing partial data"
-              tone="warning"
-              action={{ content: "Load All Products", onAction: handleLoadAll }}
-            >
-              <p>Only showing the first 50 products. Click "Load All Products" to enable sorting and filtering across all products.</p>
-            </Banner>
-          )}
-
-          {isLoading && (
-            <Card>
-              <BlockStack gap="200">
-                <Text variant="bodyMd">Loading all products...</Text>
-                <ProgressBar progress={75} tone="primary" />
-              </BlockStack>
-            </Card>
-          )}
-
           <IndexFilters
             queryValue={queryValue}
             queryPlaceholder="Search by SKU or Product..."
@@ -396,6 +372,7 @@ export default function Report() {
                 { title: "Suggested Order" },
               ]}
               selectable={false}
+              loading={isLoading}
               sortable={[false, true, true, true, true, true, true, true, true, true, false, true, true]}
               sortDirection={sortDirection}
               sortColumnIndex={
@@ -456,8 +433,9 @@ export default function Report() {
           {/* Client-side Pagination */}
           {totalPages > 1 && (
             <InlineStack align="center" gap="400">
+              <ProductsLoadingIndicator />
               <Text variant="bodySm" as="span" tone="subdued">
-                Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredAndSortedVariants.length)} of {filteredAndSortedVariants.length} products{hasMoreProducts ? "*" : ""}
+                Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredAndSortedVariants.length)} of {filteredAndSortedVariants.length} products
               </Text>
               <Pagination
                 hasPrevious={currentPage > 1}
@@ -469,9 +447,10 @@ export default function Report() {
           )}
 
           {totalPages <= 1 && filteredAndSortedVariants.length > 0 && (
-            <InlineStack align="center">
+            <InlineStack align="center" gap="300">
+              <ProductsLoadingIndicator />
               <Text variant="bodySm" as="span" tone="subdued">
-                Showing {filteredAndSortedVariants.length} products{hasMoreProducts ? "*" : ""}
+                Showing {filteredAndSortedVariants.length} products
               </Text>
             </InlineStack>
           )}

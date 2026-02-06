@@ -18,15 +18,14 @@ import {
   ChoiceList,
   Pagination,
   Badge,
-  Banner,
-  ProgressBar,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import AppNavigation from "../components/AppNavigation";
+import ProductsLoadingIndicator from "../components/ProductsLoadingIndicator";
 import { useProducts } from "../context/ProductsContext";
 
 export default function ProductsPage() {
-  const { variants, suppliers, isComplete, isLoading, loadAllProducts, hasMoreProducts } = useProducts();
+  const { variants, suppliers, isLoading } = useProducts();
   const revalidator = useRevalidator();
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -57,12 +56,6 @@ export default function ProductsPage() {
 
   // Filter states
   const [statusFilter, setStatusFilter] = useState(["ACTIVE"]);
-
-  // Load all products
-  const handleLoadAll = useCallback(() => {
-    const status = statusFilter.length > 0 ? statusFilter[0] : "ACTIVE";
-    loadAllProducts(status);
-  }, [loadAllProducts, statusFilter]);
 
   // Client-side search filter
   const handleFiltersQueryChange = useCallback((value) => {
@@ -400,25 +393,6 @@ export default function ProductsPage() {
         <BlockStack gap="400">
           <AppNavigation />
 
-          {hasMoreProducts && !isLoading && (
-            <Banner
-              title="Showing partial data"
-              tone="warning"
-              action={{ content: "Load All Products", onAction: handleLoadAll }}
-            >
-              <p>Only showing the first 50 products. Click "Load All Products" to enable sorting and filtering across all products.</p>
-            </Banner>
-          )}
-
-          {isLoading && (
-            <Card>
-              <BlockStack gap="200">
-                <Text variant="bodyMd">Loading all products...</Text>
-                <ProgressBar progress={75} tone="primary" />
-              </BlockStack>
-            </Card>
-          )}
-
           <IndexFilters
             queryValue={queryValue}
             queryPlaceholder="Search by SKU or Product..."
@@ -502,8 +476,9 @@ export default function ProductsPage() {
           {/* Client-side Pagination */}
           {totalPages > 1 && (
             <InlineStack align="center" gap="400">
+              <ProductsLoadingIndicator />
               <Text variant="bodySm" as="span" tone="subdued">
-                Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredAndSortedVariants.length)} of {filteredAndSortedVariants.length} variants{hasMoreProducts ? "*" : ""}
+                Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredAndSortedVariants.length)} of {filteredAndSortedVariants.length} variants
               </Text>
               <Pagination
                 hasPrevious={currentPage > 1}
@@ -515,9 +490,10 @@ export default function ProductsPage() {
           )}
 
           {totalPages <= 1 && filteredAndSortedVariants.length > 0 && (
-            <InlineStack align="center">
+            <InlineStack align="center" gap="300">
+              <ProductsLoadingIndicator />
               <Text variant="bodySm" as="span" tone="subdued">
-                Showing {filteredAndSortedVariants.length} variants{hasMoreProducts ? "*" : ""}
+                Showing {filteredAndSortedVariants.length} variants
               </Text>
             </InlineStack>
           )}

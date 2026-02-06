@@ -4,13 +4,12 @@ import {
   Text,
   BlockStack,
   InlineStack,
-  Banner,
-  ProgressBar,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
-import { useMemo, useCallback } from "react";
+import { useMemo } from "react";
 import { ResponsiveBar } from "@nivo/bar";
 import AppNavigation from "../components/AppNavigation";
+import ProductsLoadingIndicator from "../components/ProductsLoadingIndicator";
 import { useProducts } from "../context/ProductsContext";
 
 // Helper function to get metafield value
@@ -72,11 +71,7 @@ function calculateMetrics(variant, suppliers) {
 }
 
 export default function Dashboard() {
-  const { variants, suppliers, isComplete, isLoading, loadAllProducts, hasMoreProducts } = useProducts();
-
-  const handleLoadAll = useCallback(() => {
-    loadAllProducts("ACTIVE");
-  }, [loadAllProducts]);
+  const { variants, suppliers, isComplete } = useProducts();
 
   // Calculate risk distribution
   const riskStats = useMemo(() => {
@@ -131,25 +126,6 @@ export default function Dashboard() {
         <BlockStack gap="400">
           <AppNavigation />
 
-          {hasMoreProducts && !isLoading && (
-            <Banner
-              title="Showing partial data"
-              tone="warning"
-              action={{ content: "Load All Products", onAction: handleLoadAll }}
-            >
-              <p>Statistics are based on the first 50 products. Click "Load All Products" to see the complete inventory risk overview.</p>
-            </Banner>
-          )}
-
-          {isLoading && (
-            <Card>
-              <BlockStack gap="200">
-                <Text variant="bodyMd">Loading all products...</Text>
-                <ProgressBar progress={75} tone="primary" />
-              </BlockStack>
-            </Card>
-          )}
-
           <Card>
             <div style={{ padding: "16px" }}>
               <BlockStack gap="400">
@@ -157,9 +133,12 @@ export default function Dashboard() {
                   <Text variant="headingMd" as="h2">
                     Inventory Risk Overview
                   </Text>
-                  <Text variant="bodyMd" as="p" tone="subdued">
-                    {totalVariants} total products{hasMoreProducts ? "*" : ""}
-                  </Text>
+                  <InlineStack gap="300" blockAlign="center">
+                    <ProductsLoadingIndicator />
+                    <Text variant="bodyMd" as="p" tone="subdued">
+                      {totalVariants} total products
+                    </Text>
+                  </InlineStack>
                 </InlineStack>
 
                 <div style={{ height: "300px", width: "100%" }}>
