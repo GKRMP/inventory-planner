@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useLoaderData, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 import {
   Page,
   Card,
@@ -8,148 +8,11 @@ import {
   BlockStack,
   InlineStack,
   Badge,
-  Spinner,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
 import AppNavigation from "../components/AppNavigation";
-
-export async function loader({ request }) {
-  const { admin } = await authenticate.admin(request);
-
-  // Fetch all suppliers first - this is quick and critical
-  let suppliers = [];
-  try {
-    const suppliersQuery = `
-      {
-        metaobjects(type: "supplier", first: 250) {
-          edges {
-            node {
-              id
-              handle
-              fields {
-                key
-                value
-              }
-            }
-          }
-        }
-      }
-    `;
-
-    const suppliersResponse = await admin.graphql(suppliersQuery);
-    const suppliersData = await suppliersResponse.json();
-
-    if (suppliersData.data && suppliersData.data.metaobjects) {
-      suppliers = suppliersData.data.metaobjects.edges.map((e) => e.node);
-    } else {
-      console.error("Suppliers response error:", suppliersData);
-    }
-  } catch (error) {
-    console.error("Error fetching suppliers:", error);
-  }
-
-  // Helper function to fetch all products with pagination
-  async function fetchAllProducts() {
-    let allProducts = [];
-    let hasNextPage = true;
-    let cursor = null;
-    let pageCount = 0;
-    const maxPages = 20; // Safety limit to prevent infinite loops
-
-    while (hasNextPage && pageCount < maxPages) {
-      try {
-        const productsQuery = `
-          query GetProducts($cursor: String) {
-            products(first: 250, after: $cursor) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              edges {
-                node {
-                  id
-                  title
-                  variants(first: 100) {
-                    edges {
-                      node {
-                        id
-                        sku
-                        title
-                        inventoryQuantity
-                        metafields(first: 10) {
-                          edges {
-                            node {
-                              id
-                              namespace
-                              key
-                              value
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        `;
-
-        const response = await admin.graphql(productsQuery, {
-          variables: { cursor },
-        });
-        const data = await response.json();
-
-        if (data.errors) {
-          console.error("GraphQL errors:", data.errors);
-          break;
-        }
-
-        if (!data.data || !data.data.products) {
-          console.error("Unexpected response:", data);
-          break;
-        }
-
-        allProducts = [...allProducts, ...data.data.products.edges];
-        hasNextPage = data.data.products.pageInfo.hasNextPage;
-        cursor = data.data.products.pageInfo.endCursor;
-        pageCount++;
-      } catch (error) {
-        console.error("Error fetching products page:", error);
-        break;
-      }
-    }
-
-    return allProducts;
-  }
-
-  // Fetch all products
-  let variants = [];
-  try {
-    const productEdges = await fetchAllProducts();
-
-    // Transform data
-    productEdges.forEach((productEdge) => {
-      const product = productEdge.node;
-      product.variants.edges.forEach((variantEdge) => {
-        const variant = variantEdge.node;
-        variants.push({
-          id: variant.id,
-          sku: variant.sku,
-          variantTitle: variant.title,
-          productTitle: product.title,
-          inventoryQuantity: variant.inventoryQuantity || 0,
-          metafields: variant.metafields.edges.map((m) => m.node),
-        });
-      });
-    });
-  } catch (error) {
-    console.error("Error processing products:", error);
-  }
-
-  return { variants, suppliers };
-}
+import ProductsLoadingIndicator from "../components/ProductsLoadingIndicator";
+import { useProducts } from "../context/ProductsContext";
 
 // Helper function to get metafield value
 function getMetafieldValue(metafields, namespace, key) {
@@ -160,7 +23,7 @@ function getMetafieldValue(metafields, namespace, key) {
 }
 
 export default function SupplierDashboard() {
-  const { variants, suppliers } = useLoaderData();
+  const { variants, suppliers, isLoading } = useProducts();
   const navigate = useNavigate();
   const [sortColumn, setSortColumn] = useState("totalVariants");
   const [sortDirection, setSortDirection] = useState("descending");
@@ -330,6 +193,12 @@ export default function SupplierDashboard() {
       <Page fullWidth>
         <BlockStack gap="400">
           <AppNavigation />
+
+          {/* Loading indicator in header */}
+          <InlineStack align="end">
+            <ProductsLoadingIndicator />
+          </InlineStack>
+
           <InlineStack gap="400" wrap>
             <Card background="bg-surface-secondary">
               <BlockStack gap="100" inlineAlign="center">
@@ -398,6 +267,7 @@ export default function SupplierDashboard() {
                 { title: "Inventory Value" },
               ]}
               selectable={false}
+              loading={isLoading}
               sortable={[true, true, true, true, true, true, true, true]}
               sortDirection={sortDirection}
               sortColumnIndex={
