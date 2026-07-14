@@ -1,7 +1,16 @@
 import { authenticate } from "../shopify.server";
+import { writeThroughSupplierData } from "../services/sync.server";
+
+async function mirrorWrite(shop, variantId, supplierData) {
+  try {
+    await writeThroughSupplierData(shop, variantId, supplierData);
+  } catch (error) {
+    console.error(`Variant supplier-data mirror write-through failed for ${shop}:`, error);
+  }
+}
 
 export async function action({ request }) {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const body = await request.json();
 
   const { variantId, supplierData } = body;
@@ -56,7 +65,11 @@ export async function action({ request }) {
       },
     });
 
-    return await response.json();
+    const result = await response.json();
+    if (!result?.data?.metafieldsSet?.userErrors?.length) {
+      await mirrorWrite(session.shop, variantId, supplierData);
+    }
+    return result;
   } else {
     // Create new metafield
     const createMutation = `
@@ -88,6 +101,10 @@ export async function action({ request }) {
       },
     });
 
-    return await response.json();
+    const result = await response.json();
+    if (!result?.data?.metafieldsSet?.userErrors?.length) {
+      await mirrorWrite(session.shop, variantId, supplierData);
+    }
+    return result;
   }
 }
