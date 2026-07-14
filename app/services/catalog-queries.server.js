@@ -1,0 +1,96 @@
+import prisma from "../db.server";
+
+// Reconstructs the metaobject-fields shape ({id, handle, fields: [{key, value}]})
+// that app.dashboard.jsx's supMap builder and every other consumer already
+// expect, so switching suppliers from a live metaobjects query to this mirror
+// requires no changes to that client-side logic.
+function supplierToMetaobjectShape(s) {
+  const kv = (key, value) => ({ key, value: value ?? "" });
+  return {
+    id: s.id,
+    handle: s.id,
+    fields: [
+      kv("supplier_id", s.supplierId),
+      kv("supplier_name", s.name),
+      kv("contact_name", s.contactName),
+      kv("contact_name_2", s.contactName2),
+      kv("address", s.address),
+      kv("address_2", s.address2),
+      kv("city", s.city),
+      kv("state", s.state),
+      kv("zip", s.zip),
+      kv("country", s.country),
+      kv("phone_1", s.phone1),
+      kv("phone_2", s.phone2),
+      kv("email_1", s.email1),
+      kv("email_2", s.email2),
+      kv("website", s.website),
+      kv("notes", s.notes),
+      kv("specialized_mfg", s.specializedMfg ? "true" : "false"),
+    ],
+  };
+}
+
+export async function getSuppliers(shop) {
+  const suppliers = await prisma.supplier.findMany({
+    where: { shop },
+    orderBy: { name: "asc" },
+  });
+  return suppliers.map(supplierToMetaobjectShape);
+}
+
+// Reconstructs the variant shape enrichVariant/getSupplierData already
+// expect: {id, sku, variantTitle, productTitle, productStatus,
+// inventoryQuantity, metafields}, synthesizing a single "supplier_data"
+// metafield from the mirrored JSON column.
+function variantToShape(v) {
+  return {
+    id: v.id,
+    sku: v.sku || "",
+    variantTitle: v.title || "",
+    productTitle: v.product?.title || "Unknown",
+    productStatus: v.product?.status || "ACTIVE",
+    inventoryQuantity: v.inventoryQuantity || 0,
+    metafields: v.supplierDataRaw
+      ? [
+          {
+            id: `${v.id}-supplier_data`,
+            namespace: "inventory",
+            key: "supplier_data",
+            value: JSON.stringify(v.supplierDataRaw),
+          },
+        ]
+      : [],
+  };
+}
+
+export async function getVariantsWithSources(shop, { search = "", supplierId = "all", status = "ACTIVE" } = {}) {
+  const trimmedSearch = search.trim();
+
+  const where = {
+    shop,
+    ...(status ? { product: { status } } : {}),
+    ...(trimmedSearch
+      ? {
+          OR: [
+            { sku: { contains: trimmedSearch, mode: "insensitive" } },
+            { title: { contains: trimmedSearch, mode: "insensitive" } },
+            { product: { title: { contains: trimmedSearch, mode: "insensitive" } } },
+          ],
+        }
+      : {}),
+    ...(supplierId && supplierId !== "all" ? { sources: { some: { supplierId } } } : {}),
+  };
+
+  const variants = await prisma.variant.findMany({
+    where,
+    include: { product: true },
+    orderBy: { sku: "asc" },
+  });
+
+  return variants.map(variantToShape);
+}
+
+export async function getSyncState(shop) {
+  return prisma.syncState.findUnique({ where: { shop } });
+}
