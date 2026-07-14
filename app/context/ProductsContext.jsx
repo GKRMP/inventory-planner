@@ -3,62 +3,113 @@ import { useFetcher } from "react-router";
 
 const ProductsContext = createContext(null);
 
-export function ProductsProvider({ children, initialVariants = [], initialSuppliers = [], hasMoreProducts = false }) {
-  const fetcher = useFetcher();
+export function ProductsProvider({
+  children,
+  initialVariants = [],
+  initialSuppliers = [],
+  hasMoreProducts = false,
+  initialCursor = null,
+  initialLoadError = null,
+}) {
+  const pageFetcher = useFetcher();
   const suppliersFetcher = useFetcher();
   const [variants, setVariants] = useState(initialVariants);
   const [suppliers, setSuppliers] = useState(initialSuppliers);
   const [isComplete, setIsComplete] = useState(!hasMoreProducts);
+  const [loadError, setLoadError] = useState(initialLoadError);
+
+  const cursorRef = useRef(initialCursor);
+  const statusRef = useRef("ACTIVE");
   const hasStartedAutoLoad = useRef(false);
+  const isFetchingPageRef = useRef(false);
 
-  // Update variants when fetcher completes
+  const isLoading = pageFetcher.state === "submitting" || pageFetcher.state === "loading";
+
+  const requestNextPage = useCallback(
+    (statusFilter) => {
+      if (isFetchingPageRef.current) return;
+      isFetchingPageRef.current = true;
+      pageFetcher.submit(
+        {
+          intent: "loadPage",
+          statusFilter: statusFilter || statusRef.current,
+          cursor: cursorRef.current || "",
+        },
+        { method: "post", action: "/api/products-loader" }
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  // Handle each page response: append on success, surface errors without
+  // ever marking a failed/partial load as complete.
   useEffect(() => {
-    if (fetcher.data?.variants && fetcher.state === "idle") {
-      setVariants(fetcher.data.variants);
-      setIsComplete(fetcher.data.isComplete || false);
-    }
-  }, [fetcher.data, fetcher.state]);
+    if (pageFetcher.state !== "idle" || !pageFetcher.data) return;
+    isFetchingPageRef.current = false;
 
-  // Update suppliers when the suppliers fetcher completes
+    const data = pageFetcher.data;
+
+    if (data.error) {
+      setLoadError(data.error);
+      return;
+    }
+
+    setLoadError(null);
+    setVariants((prev) => {
+      const seen = new Set(prev.map((v) => v.id));
+      const merged = prev.slice();
+      (data.variants || []).forEach((v) => {
+        if (!seen.has(v.id)) merged.push(v);
+      });
+      return merged;
+    });
+
+    const hasNextPage = !!data.pageInfo?.hasNextPage;
+    cursorRef.current = data.pageInfo?.endCursor || null;
+
+    if (hasNextPage) {
+      requestNextPage(statusRef.current);
+    } else {
+      setIsComplete(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageFetcher.state, pageFetcher.data]);
+
   useEffect(() => {
     if (suppliersFetcher.data?.suppliers && suppliersFetcher.state === "idle") {
       setSuppliers(suppliersFetcher.data.suppliers);
     }
   }, [suppliersFetcher.data, suppliersFetcher.state]);
 
-  // Auto-load all products in background when app starts
+  // Auto-continue loading remaining pages once the first (server-rendered)
+  // page has already been shown.
   useEffect(() => {
-    if (hasMoreProducts && !hasStartedAutoLoad.current && fetcher.state === "idle") {
+    if (hasMoreProducts && !isComplete && !hasStartedAutoLoad.current) {
       hasStartedAutoLoad.current = true;
-      // Small delay to let the page render first
-      const timer = setTimeout(() => {
-        fetcher.submit(
-          { intent: "loadAllProducts", statusFilter: "ACTIVE" },
-          { method: "post", action: "/api/products-loader" }
-        );
-      }, 500);
+      const timer = setTimeout(() => requestNextPage(statusRef.current), 500);
       return () => clearTimeout(timer);
     }
-  }, [hasMoreProducts, fetcher]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasMoreProducts]);
 
-  const isLoading = fetcher.state === "submitting" || fetcher.state === "loading";
+  const retryLoad = useCallback(() => {
+    setLoadError(null);
+    requestNextPage(statusRef.current);
+  }, [requestNextPage]);
 
-  const loadAllProducts = useCallback((statusFilter = "ACTIVE") => {
-    if (isComplete || isLoading) return;
-    fetcher.submit(
-      { intent: "loadAllProducts", statusFilter },
-      { method: "post", action: "/api/products-loader" }
-    );
-  }, [fetcher, isComplete, isLoading]);
-
-  const refreshProducts = useCallback((statusFilter = "ACTIVE") => {
-    setIsComplete(false);
-    hasStartedAutoLoad.current = false;
-    fetcher.submit(
-      { intent: "loadAllProducts", statusFilter },
-      { method: "post", action: "/api/products-loader" }
-    );
-  }, [fetcher]);
+  const refreshProducts = useCallback(
+    (statusFilter = "ACTIVE") => {
+      statusRef.current = statusFilter;
+      cursorRef.current = null;
+      hasStartedAutoLoad.current = true;
+      setVariants([]);
+      setIsComplete(false);
+      setLoadError(null);
+      requestNextPage(statusFilter);
+    },
+    [requestNextPage]
+  );
 
   const refreshSuppliers = useCallback(() => {
     suppliersFetcher.load("/api/suppliers");
@@ -71,7 +122,10 @@ export function ProductsProvider({ children, initialVariants = [], initialSuppli
         suppliers,
         isComplete,
         isLoading,
-        loadAllProducts,
+        loadError,
+        retryLoad,
+        loadedCount: variants.length,
+        loadAllProducts: refreshProducts,
         refreshProducts,
         refreshSuppliers,
         hasMoreProducts: !isComplete,
