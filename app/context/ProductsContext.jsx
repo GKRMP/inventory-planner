@@ -5,8 +5,9 @@ const ProductsContext = createContext(null);
 
 export function ProductsProvider({ children, initialVariants = [], initialSuppliers = [], hasMoreProducts = false }) {
   const fetcher = useFetcher();
+  const suppliersFetcher = useFetcher();
   const [variants, setVariants] = useState(initialVariants);
-  const [suppliers] = useState(initialSuppliers);
+  const [suppliers, setSuppliers] = useState(initialSuppliers);
   const [isComplete, setIsComplete] = useState(!hasMoreProducts);
   const hasStartedAutoLoad = useRef(false);
 
@@ -17,6 +18,13 @@ export function ProductsProvider({ children, initialVariants = [], initialSuppli
       setIsComplete(fetcher.data.isComplete || false);
     }
   }, [fetcher.data, fetcher.state]);
+
+  // Update suppliers when the suppliers fetcher completes
+  useEffect(() => {
+    if (suppliersFetcher.data?.suppliers && suppliersFetcher.state === "idle") {
+      setSuppliers(suppliersFetcher.data.suppliers);
+    }
+  }, [suppliersFetcher.data, suppliersFetcher.state]);
 
   // Auto-load all products in background when app starts
   useEffect(() => {
@@ -52,6 +60,10 @@ export function ProductsProvider({ children, initialVariants = [], initialSuppli
     );
   }, [fetcher]);
 
+  const refreshSuppliers = useCallback(() => {
+    suppliersFetcher.load("/api/suppliers");
+  }, [suppliersFetcher]);
+
   return (
     <ProductsContext.Provider
       value={{
@@ -61,6 +73,7 @@ export function ProductsProvider({ children, initialVariants = [], initialSuppli
         isLoading,
         loadAllProducts,
         refreshProducts,
+        refreshSuppliers,
         hasMoreProducts: !isComplete,
       }}
     >

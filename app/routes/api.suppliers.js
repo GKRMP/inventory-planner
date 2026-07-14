@@ -35,6 +35,31 @@ export async function action({ request }) {
 
   if (intent === "create") {
     const fields = JSON.parse(form.get("fields"));
+    const fieldVal = (key) => fields.find((f) => f.key === key)?.value?.trim() || "";
+    const supplierId = fieldVal("supplier_id");
+    const supplierName = fieldVal("supplier_name");
+
+    // Required-field validation
+    if (!supplierId || !supplierName) {
+      return { error: "Supplier ID and Supplier Name are required." };
+    }
+
+    // Duplicate supplier_id check
+    const existingQuery = `
+      {
+        metaobjects(type: "supplier", first: 250) {
+          edges { node { fields { key value } } }
+        }
+      }
+    `;
+    const existingResponse = await admin.graphql(existingQuery);
+    const existingData = await existingResponse.json();
+    const duplicate = (existingData.data?.metaobjects?.edges || []).some((e) =>
+      e.node.fields.some((f) => f.key === "supplier_id" && f.value === supplierId)
+    );
+    if (duplicate) {
+      return { error: `A supplier with ID "${supplierId}" already exists.` };
+    }
 
     const mutation = `
       mutation CreateSupplier($fields: [MetaobjectFieldInput!]!) {
@@ -55,6 +80,14 @@ export async function action({ request }) {
   if (intent === "update") {
     const id = form.get("id");
     const fields = JSON.parse(form.get("fields"));
+
+    if (!id) {
+      return { error: "Missing supplier reference for update." };
+    }
+    const nameVal = fields.find((f) => f.key === "supplier_name")?.value?.trim() || "";
+    if (!nameVal) {
+      return { error: "Supplier Name is required." };
+    }
 
     const mutation = `
       mutation UpdateSupplier($id: ID!, $fields: [MetaobjectFieldInput!]!) {
