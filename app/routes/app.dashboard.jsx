@@ -3007,10 +3007,12 @@ export default function Dashboard() {
                 };
                 const field = (label, key, opts = {}) => (
                   <div key={key} style={{ marginBottom: 14 }}>
-                    <label style={labelStyle}>
-                      {label}
-                      {opts.required && <span style={{ color: "#b42318" }}> *</span>}
-                    </label>
+                    {!opts.checkbox && (
+                      <label style={labelStyle}>
+                        {label}
+                        {opts.required && <span style={{ color: "#b42318" }}> *</span>}
+                      </label>
+                    )}
                     {opts.textarea ? (
                       <textarea
                         rows={3}
@@ -3026,9 +3028,7 @@ export default function Dashboard() {
                           onChange={(e) => setSupFormData((p) => ({ ...p, [key]: e.target.checked }))}
                           style={{ width: 16, height: 16, cursor: "pointer" }}
                         />
-                        <span style={{ fontSize: 13, color: "#232220" }}>
-                          This supplier specializes in manufacturing
-                        </span>
+                        <span style={{ fontSize: 13, color: "#232220" }}>{label}</span>
                       </label>
                     ) : (
                       <input
