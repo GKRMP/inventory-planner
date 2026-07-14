@@ -51,6 +51,7 @@ export async function action({ request }) {
             { name: "Email 2", key: "email_2", type: "single_line_text_field" }
             { name: "Website", key: "website", type: "url" }
             { name: "Notes", key: "notes", type: "multi_line_text_field" }
+            { name: "Specialized Mfg", key: "specialized_mfg", type: "boolean" }
           ]
         }) {
           metaobjectDefinition {
@@ -89,6 +90,7 @@ export async function action({ request }) {
     { name: "Email 2", key: "email_2", type: "single_line_text_field" },
     { name: "Website", key: "website", type: "url" },
     { name: "Notes", key: "notes", type: "multi_line_text_field" },
+    { name: "Specialized Mfg", key: "specialized_mfg", type: "boolean" },
   ];
 
   const missingFields = requiredFields.filter((f) => !existingKeys.includes(f.key));

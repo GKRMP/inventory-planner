@@ -1,4 +1,5 @@
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { useFetcher } from "react-router";
 import { useProducts } from "../context/ProductsContext";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -175,7 +176,8 @@ const MONO = { fontFamily: "'IBM Plex Mono', monospace" };
 // ─── component ───────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const { variants, suppliers, isLoading, refreshProducts } = useProducts();
+  const { variants, suppliers, isLoading, refreshProducts, refreshSuppliers } =
+    useProducts();
 
   const [screen, setScreen] = useState("dashboard");
   const [search, setSearch] = useState("");
@@ -189,14 +191,41 @@ export default function Dashboard() {
   const [prodSup, setProdSup] = useState("all");
   const [toast, setToast] = useState("");
   const toastRef = useRef(null);
+  const [supFormOpen, setSupFormOpen] = useState(false);
+  const [supFormMode, setSupFormMode] = useState("add");
+  const [supFormData, setSupFormData] = useState({});
+  const supFetcher = useFetcher();
+  const supSubmitRef = useRef(false);
 
   // supplier map
   const supMap = useMemo(() => {
     const m = {};
     suppliers.forEach((s) => {
-      const id = s.fields.find((f) => f.key === "supplier_id")?.value;
-      const name = s.fields.find((f) => f.key === "supplier_name")?.value || "Unknown";
-      if (id) m[id] = { id, name, code: name.slice(0, 3).toUpperCase() };
+      const fv = (key) => s.fields.find((f) => f.key === key)?.value || "";
+      const id = fv("supplier_id");
+      const name = fv("supplier_name") || "Unknown";
+      if (id)
+        m[id] = {
+          gid: s.id,
+          supplierId: id,
+          name,
+          code: name.slice(0, 3).toUpperCase(),
+          contactName: fv("contact_name"),
+          contactName2: fv("contact_name_2"),
+          address: fv("address"),
+          address2: fv("address_2"),
+          city: fv("city"),
+          state: fv("state"),
+          zip: fv("zip"),
+          country: fv("country"),
+          phone1: fv("phone_1"),
+          phone2: fv("phone_2"),
+          email1: fv("email_1"),
+          email2: fv("email_2"),
+          website: fv("website"),
+          notes: fv("notes"),
+          specializedMfg: fv("specialized_mfg") === "true",
+        };
     });
     return m;
   }, [suppliers]);
@@ -207,10 +236,11 @@ export default function Dashboard() {
     [variants, supMap]
   );
 
-  // supplier list derived from part data
+  // supplier list derived from part data + all known metaobject suppliers
   const supList = useMemo(() => {
     const ids = new Set();
     enriched.forEach((e) => e.sources.forEach((s) => s.sup && ids.add(s.sup)));
+    Object.keys(supMap).forEach((id) => ids.add(id)); // include suppliers with no parts yet
     return Array.from(ids).map((id) => {
       const carries = enriched.filter((e) => e.sources.some((s) => s.sup === id));
       const avgLead =
@@ -222,10 +252,20 @@ export default function Dashboard() {
               ) / carries.length
             )
           : 0;
+      const raw = supMap[id] || null;
       return {
         id,
-        name: supMap[id]?.name || id,
-        code: supMap[id]?.code || id.slice(0, 3).toUpperCase(),
+        name: raw?.name || id,
+        code: raw?.code || id.slice(0, 3).toUpperCase(),
+        gid: raw?.gid || "",
+        address: raw?.address || "",
+        city: raw?.city || "",
+        state: raw?.state || "",
+        country: raw?.country || "",
+        email1: raw?.email1 || "",
+        email2: raw?.email2 || "",
+        specializedMfg: raw?.specializedMfg || false,
+        _raw: raw,
         avgLead,
         partsCount: carries.length,
         recCount: enriched.filter((e) => e.recommended?.sup === id).length,
@@ -250,6 +290,64 @@ export default function Dashboard() {
     setPoOpen(false);
     setSearch("");
   }, []);
+
+  const openAddSupplier = useCallback(() => {
+    setSupFormData({ supplier_id: `SUP-${Date.now()}` });
+    setSupFormMode("add");
+    setSupFormOpen(true);
+  }, []);
+
+  const openEditSupplier = useCallback((raw) => {
+    if (!raw) return;
+    setSupFormData({
+      supplier_id: raw.supplierId,
+      supplier_name: raw.name,
+      contact_name: raw.contactName,
+      contact_name_2: raw.contactName2,
+      address: raw.address,
+      address_2: raw.address2,
+      city: raw.city,
+      state: raw.state,
+      zip: raw.zip,
+      country: raw.country,
+      phone_1: raw.phone1,
+      phone_2: raw.phone2,
+      email_1: raw.email1,
+      email_2: raw.email2,
+      website: raw.website,
+      notes: raw.notes,
+      specialized_mfg: raw.specializedMfg,
+      _gid: raw.gid,
+    });
+    setSupFormMode("edit");
+    setSupFormOpen(true);
+  }, []);
+
+  useEffect(() => {
+    if (!supSubmitRef.current) return;
+    if (supFetcher.state !== "idle" || !supFetcher.data) return;
+    supSubmitRef.current = false;
+
+    const data = supFetcher.data;
+    // App-level validation error returned by /api/suppliers
+    if (data.error) {
+      showToast(data.error);
+      return;
+    }
+    // Shopify userErrors from the metaobject mutation
+    const errs =
+      data?.data?.metaobjectCreate?.userErrors ||
+      data?.data?.metaobjectUpdate?.userErrors ||
+      [];
+    if (errs.length > 0) {
+      showToast(errs[0].message || "Could not save supplier");
+      return;
+    }
+    // Success — close, refresh supplier list, confirm
+    setSupFormOpen(false);
+    if (refreshSuppliers) refreshSuppliers();
+    showToast(supFormMode === "add" ? "Supplier added" : "Supplier updated");
+  }, [supFetcher.state, supFetcher.data, supFormMode, showToast, refreshSuppliers]);
 
   const openDetail = useCallback(
     (id) => {
@@ -524,7 +622,7 @@ export default function Dashboard() {
     ...supList.map((s) => ({ value: s.id, label: s.name })),
   ];
 
-  const anyOverlay = !!selectedId || poOpen;
+  const anyOverlay = !!selectedId || poOpen || supFormOpen;
 
   // ─── render ──────────────────────────────────────────────────────────────
 
@@ -1823,6 +1921,25 @@ export default function Dashboard() {
             {/* ── SUPPLIERS ── */}
             {!isLoading && screen === "suppliers" && (
               <div style={{ padding: "24px 28px 28px" }}>
+                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
+                  <button
+                    onClick={openAddSupplier}
+                    className="rmp-btn-dark"
+                    style={{
+                      background: "#2b2825",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "8px 16px",
+                      fontFamily: "inherit",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    + Add Supplier
+                  </button>
+                </div>
                 {supList.length === 0 ? (
                   <div
                     style={{
@@ -1856,11 +1973,12 @@ export default function Dashboard() {
                         <div
                           style={{
                             display: "flex",
-                            alignItems: "center",
+                            alignItems: "flex-start",
                             justifyContent: "space-between",
+                            gap: 8,
                           }}
                         >
-                          <div>
+                          <div style={{ minWidth: 0 }}>
                             <div
                               style={{
                                 fontWeight: 700,
@@ -1880,6 +1998,52 @@ export default function Dashboard() {
                             >
                               {s.code}
                             </div>
+                            {(s.city || s.state || s.country) && (
+                              <div style={{ fontSize: 12, color: "#6b675f", marginTop: 3 }}>
+                                {[s.city, s.state, s.country].filter(Boolean).join(", ")}
+                              </div>
+                            )}
+                            {(s.email1 || s.email2) && (
+                              <div style={{ fontSize: 12, color: "#6b675f", marginTop: 1 }}>
+                                {[s.email1, s.email2].filter(Boolean).join("  ·  ")}
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ display: "flex", gap: 5, alignItems: "center", flexShrink: 0 }}>
+                            {s.specializedMfg && (
+                              <span
+                                style={{
+                                  fontSize: 10,
+                                  fontWeight: 600,
+                                  padding: "2px 7px",
+                                  borderRadius: 99,
+                                  background: "#eff8ff",
+                                  color: "#175cd3",
+                                  border: "1px solid #b2ddff",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                Specialized Mfg
+                              </span>
+                            )}
+                            <button
+                              onClick={() => openEditSupplier(s._raw)}
+                              className="rmp-btn-light"
+                              title="Edit supplier"
+                              style={{
+                                border: "1px solid #e8e6e0",
+                                borderRadius: 6,
+                                padding: "3px 8px",
+                                fontFamily: "inherit",
+                                fontSize: 14,
+                                cursor: "pointer",
+                                background: "#fff",
+                                color: "#57534e",
+                                lineHeight: 1,
+                              }}
+                            >
+                              ✎
+                            </button>
                           </div>
                         </div>
 
@@ -2031,6 +2195,7 @@ export default function Dashboard() {
             onClick={() => {
               setSelectedId(null);
               setPoOpen(false);
+              setSupFormOpen(false);
             }}
             style={{
               position: "fixed",
@@ -2746,6 +2911,257 @@ export default function Dashboard() {
               style={{ width: 7, height: 7, borderRadius: "50%", background: "#17b26a" }}
             />
             {toast}
+          </div>
+        )}
+
+        {/* ── SUPPLIER ADD/EDIT SLIDE-OVER ── */}
+        {supFormOpen && (
+          <div
+            className="rmp-slide"
+            style={{
+              position: "fixed",
+              top: 0,
+              right: 0,
+              height: "100vh",
+              width: 520,
+              maxWidth: "96vw",
+              background: "#f7f6f3",
+              zIndex: 50,
+              boxShadow: "-12px 0 40px rgba(35,34,32,0.13)",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            {/* header */}
+            <div
+              style={{
+                flex: "none",
+                background: "#fff",
+                borderBottom: "1px solid #e8e6e0",
+                padding: "18px 22px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 16, letterSpacing: "-0.2px" }}>
+                  {supFormMode === "add" ? "Add Supplier" : "Edit Supplier"}
+                </div>
+                <div style={{ fontSize: 12, color: "#9a968e", marginTop: 2 }}>
+                  {supFormMode === "add"
+                    ? "Fill in the details to create a new supplier"
+                    : "Update supplier information"}
+                </div>
+              </div>
+              <button
+                onClick={() => setSupFormOpen(false)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  fontSize: 20,
+                  cursor: "pointer",
+                  color: "#9a968e",
+                  padding: "2px 6px",
+                  borderRadius: 6,
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* scrollable body */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "20px 22px" }}>
+              {(() => {
+                const sectionLabel = (text) => (
+                  <div
+                    key={text}
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.06em",
+                      color: "#9a968e",
+                      margin: "18px 0 10px",
+                    }}
+                  >
+                    {text}
+                  </div>
+                );
+                const inputStyle = (disabled) => ({
+                  width: "100%",
+                  border: "1px solid #e8e6e0",
+                  borderRadius: 8,
+                  padding: "8px 11px",
+                  fontSize: 13.5,
+                  fontFamily: "inherit",
+                  background: disabled ? "#f7f6f3" : "#fff",
+                  color: disabled ? "#9a968e" : "#232220",
+                });
+                const labelStyle = {
+                  display: "block",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "#57534e",
+                  marginBottom: 4,
+                };
+                const field = (label, key, opts = {}) => (
+                  <div key={key} style={{ marginBottom: 14 }}>
+                    <label style={labelStyle}>
+                      {label}
+                      {opts.required && <span style={{ color: "#b42318" }}> *</span>}
+                    </label>
+                    {opts.textarea ? (
+                      <textarea
+                        rows={3}
+                        value={supFormData[key] || ""}
+                        onChange={(e) => setSupFormData((p) => ({ ...p, [key]: e.target.value }))}
+                        style={{ ...inputStyle(false), resize: "vertical" }}
+                      />
+                    ) : opts.checkbox ? (
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={!!supFormData[key]}
+                          onChange={(e) => setSupFormData((p) => ({ ...p, [key]: e.target.checked }))}
+                          style={{ width: 16, height: 16, cursor: "pointer" }}
+                        />
+                        <span style={{ fontSize: 13, color: "#232220" }}>
+                          This supplier specializes in manufacturing
+                        </span>
+                      </label>
+                    ) : (
+                      <input
+                        type="text"
+                        disabled={opts.disabled}
+                        value={supFormData[key] || ""}
+                        onChange={(e) => setSupFormData((p) => ({ ...p, [key]: e.target.value }))}
+                        style={inputStyle(opts.disabled)}
+                      />
+                    )}
+                  </div>
+                );
+
+                return (
+                  <div>
+                    {sectionLabel("Identity")}
+                    {field("Supplier ID", "supplier_id", { required: true, disabled: supFormMode === "edit" })}
+                    {field("Supplier Name", "supplier_name", { required: true })}
+
+                    {sectionLabel("Contact")}
+                    {field("Contact Name", "contact_name")}
+                    {field("Contact Name 2", "contact_name_2")}
+                    {field("Phone 1", "phone_1")}
+                    {field("Phone 2", "phone_2")}
+                    {field("Email 1", "email_1")}
+                    {field("Email 2", "email_2")}
+                    {field("Website", "website")}
+
+                    {sectionLabel("Address")}
+                    {field("Address", "address")}
+                    {field("Address 2", "address_2")}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      {field("City", "city")}
+                      {field("State / Province", "state")}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      {field("Zip / Postal Code", "zip")}
+                      {field("Country", "country")}
+                    </div>
+
+                    {sectionLabel("Classification")}
+                    {field("Specialized Manufacturer", "specialized_mfg", { checkbox: true })}
+
+                    {sectionLabel("Notes")}
+                    {field("Internal Notes", "notes", { textarea: true })}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* footer */}
+            <div
+              style={{
+                flex: "none",
+                background: "#fff",
+                borderTop: "1px solid #e8e6e0",
+                padding: "14px 22px",
+                display: "flex",
+                gap: 10,
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                onClick={() => setSupFormOpen(false)}
+                className="rmp-btn-light"
+                style={{
+                  border: "1px solid #e8e6e0",
+                  background: "#fff",
+                  borderRadius: 8,
+                  padding: "8px 18px",
+                  fontFamily: "inherit",
+                  fontSize: 13.5,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  color: "#57534e",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                disabled={supFetcher.state !== "idle"}
+                onClick={() => {
+                  const trim = (v) => (v || "").trim();
+                  const fields = [
+                    { key: "supplier_id", value: trim(supFormData.supplier_id) },
+                    { key: "supplier_name", value: trim(supFormData.supplier_name) },
+                    { key: "contact_name", value: trim(supFormData.contact_name) },
+                    { key: "contact_name_2", value: trim(supFormData.contact_name_2) },
+                    { key: "address", value: trim(supFormData.address) },
+                    { key: "address_2", value: trim(supFormData.address_2) },
+                    { key: "city", value: trim(supFormData.city) },
+                    { key: "state", value: trim(supFormData.state) },
+                    { key: "zip", value: trim(supFormData.zip) },
+                    { key: "country", value: trim(supFormData.country) },
+                    { key: "phone_1", value: trim(supFormData.phone_1) },
+                    { key: "phone_2", value: trim(supFormData.phone_2) },
+                    { key: "email_1", value: trim(supFormData.email_1) },
+                    { key: "email_2", value: trim(supFormData.email_2) },
+                    { key: "notes", value: trim(supFormData.notes) },
+                    { key: "specialized_mfg", value: supFormData.specialized_mfg ? "true" : "false" },
+                  ];
+                  // url-type field: Shopify rejects empty/invalid URLs, so only send when present
+                  const website = trim(supFormData.website);
+                  if (website) fields.push({ key: "website", value: website });
+
+                  const data = new FormData();
+                  data.append("intent", supFormMode === "add" ? "create" : "update");
+                  data.append("fields", JSON.stringify(fields));
+                  if (supFormMode === "edit") data.append("id", supFormData._gid || "");
+                  supSubmitRef.current = true;
+                  supFetcher.submit(data, { method: "post", action: "/api/suppliers" });
+                }}
+                className="rmp-btn-dark"
+                style={{
+                  background: "#2b2825",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 8,
+                  padding: "8px 22px",
+                  fontFamily: "inherit",
+                  fontSize: 13.5,
+                  fontWeight: 600,
+                  cursor: supFetcher.state !== "idle" ? "wait" : "pointer",
+                  opacity: supFetcher.state !== "idle" ? 0.6 : 1,
+                }}
+              >
+                {supFetcher.state !== "idle"
+                  ? "Saving…"
+                  : supFormMode === "add"
+                  ? "Add Supplier"
+                  : "Save Changes"}
+              </button>
+            </div>
           </div>
         )}
       </div>
