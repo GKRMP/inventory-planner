@@ -290,17 +290,6 @@ export default function Dashboard() {
       e.stopPropagation();
       if (!email) return;
 
-      if (e.shiftKey) {
-        // open in the user's default email client
-        const a = document.createElement("a");
-        a.href = `mailto:${email}`;
-        a.rel = "noopener noreferrer";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        return;
-      }
-
       const fallbackCopy = (text) => {
         const ta = document.createElement("textarea");
         ta.value = text;
@@ -2078,7 +2067,7 @@ export default function Dashboard() {
                                     </span>
                                     <button
                                       onClick={(e) => handleEmailClick(e, email)}
-                                      title="Click to copy · Shift+click to email"
+                                      title="Copy email address"
                                       style={{
                                         display: "inline-flex",
                                         alignItems: "center",
