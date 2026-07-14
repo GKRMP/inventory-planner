@@ -284,6 +284,49 @@ export default function Dashboard() {
     toastRef.current = setTimeout(() => setToast(""), 2400);
   }, []);
 
+  const handleEmailClick = useCallback(
+    (e, email) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!email) return;
+
+      if (e.shiftKey) {
+        // open in the user's default email client
+        const a = document.createElement("a");
+        a.href = `mailto:${email}`;
+        a.rel = "noopener noreferrer";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        return;
+      }
+
+      const fallbackCopy = (text) => {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        try {
+          document.execCommand("copy");
+        } catch {
+          // ignore — best-effort fallback
+        }
+        document.body.removeChild(ta);
+      };
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(email).catch(() => fallbackCopy(email));
+      } else {
+        fallbackCopy(email);
+      }
+      showToast(`Copied ${email}`);
+    },
+    [showToast]
+  );
+
   const go = useCallback((scr) => {
     setScreen(scr);
     setSelectedId(null);
@@ -2004,8 +2047,69 @@ export default function Dashboard() {
                               </div>
                             )}
                             {(s.email1 || s.email2) && (
-                              <div style={{ fontSize: 12, color: "#6b675f", marginTop: 1 }}>
-                                {[s.email1, s.email2].filter(Boolean).join("  ·  ")}
+                              <div
+                                style={{
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  gap: 2,
+                                  marginTop: 3,
+                                }}
+                              >
+                                {[s.email1, s.email2].filter(Boolean).map((email) => (
+                                  <div
+                                    key={email}
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: 5,
+                                      minWidth: 0,
+                                    }}
+                                  >
+                                    <span
+                                      style={{
+                                        fontSize: 12,
+                                        color: "#6b675f",
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                        whiteSpace: "nowrap",
+                                      }}
+                                    >
+                                      {email}
+                                    </span>
+                                    <button
+                                      onClick={(e) => handleEmailClick(e, email)}
+                                      title="Click to copy · Shift+click to email"
+                                      style={{
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        width: 18,
+                                        height: 18,
+                                        padding: 0,
+                                        border: "1px solid #e8e6e0",
+                                        borderRadius: 4,
+                                        background: "#fff",
+                                        color: "#9a968e",
+                                        cursor: "pointer",
+                                        flexShrink: 0,
+                                      }}
+                                    >
+                                      <svg
+                                        width="11"
+                                        height="11"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      >
+                                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                                      </svg>
+                                    </button>
+                                  </div>
+                                ))}
                               </div>
                             )}
                           </div>
