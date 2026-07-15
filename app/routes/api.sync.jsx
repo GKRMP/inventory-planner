@@ -1,26 +1,6 @@
-import { authenticate, unauthenticated } from "../shopify.server";
 import { startBulkSync, completeBulkSync } from "../services/sync.server";
 import { getSyncStatus } from "../services/catalog-queries.server";
-
-// Triggers a full catalog bulk sync. Called either from the embedded admin
-// (manual "Sync now" button, session-authenticated) or by the Render Cron
-// Job (x-sync-secret header, offline session looked up by shop domain since
-// a cron job has no browser session to authenticate with).
-async function resolveAdminAndShop(request) {
-  const syncSecret = request.headers.get("x-sync-secret");
-  if (syncSecret) {
-    if (!process.env.SYNC_SECRET || syncSecret !== process.env.SYNC_SECRET) {
-      throw new Response("Unauthorized", { status: 401 });
-    }
-    const shop = new URL(request.url).searchParams.get("shop");
-    if (!shop) throw new Response("Missing shop query parameter", { status: 400 });
-    const { admin } = await unauthenticated.admin(shop);
-    return { admin, shop };
-  }
-
-  const { admin, session } = await authenticate.admin(request);
-  return { admin, shop: session.shop };
-}
+import { resolveAdminAndShop } from "../services/cron-auth.server";
 
 // GET /api/sync?shop=xxx.myshopify.com&intent=status — cheap health check
 // (row counts + last sync state) without needing database shell access.

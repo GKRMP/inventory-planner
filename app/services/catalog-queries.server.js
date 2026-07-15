@@ -1,4 +1,5 @@
 import prisma from "../db.server";
+import { authenticate } from "../shopify.server";
 
 // Reconstructs the metaobject-fields shape ({id, handle, fields: [{key, value}]})
 // that app.dashboard.jsx's supMap builder and every other consumer already
@@ -93,6 +94,30 @@ export async function getVariantsWithSources(shop, { search = "", supplierId = "
 
 export async function getSyncState(shop) {
   return prisma.syncState.findUnique({ where: { shop } });
+}
+
+// Shared loader for the five dashboard-family routes (app.dashboard,
+// app.products, app.report, app.supplier-dashboard, app.purchase-orders):
+// authenticates, then reads the Postgres mirror instead of paginating live
+// Shopify calls. `syncPending` flags a shop whose nightly/manual sync hasn't
+// completed a first run yet, so routes can show an empty-state banner
+// instead of silently rendering zero parts.
+export async function loadCatalogForRoute(request, { status = "ACTIVE" } = {}) {
+  const { session } = await authenticate.admin(request);
+  const shop = session.shop;
+
+  const [variants, suppliers, syncState] = await Promise.all([
+    getVariantsWithSources(shop, { status }),
+    getSuppliers(shop),
+    getSyncState(shop),
+  ]);
+
+  return {
+    variants,
+    suppliers,
+    lastFullSyncAt: syncState?.lastFullSyncAt ?? null,
+    syncPending: !syncState?.lastFullSyncAt,
+  };
 }
 
 // Cheap health check for the sync — counts + last-run state, no DB shell
