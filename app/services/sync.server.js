@@ -28,6 +28,12 @@ const BULK_VARIANTS_QUERY = `
           metafield(namespace: "inventory", key: "supplier_data") {
             value
           }
+          sourcingType: metafield(namespace: "inventory", key: "sourcing_type") {
+            value
+          }
+          reproSettings: metafield(namespace: "inventory", key: "repro_settings") {
+            value
+          }
         }
       }
     }
@@ -50,6 +56,21 @@ export function parseSupplierData(raw) {
   const parsed = safeParseJson(raw);
   if (!parsed) return [];
   return Array.isArray(parsed) ? parsed : [{ ...parsed, is_primary: true }];
+}
+
+// Flattens a variant's repro_settings metafield JSON into the four mirror
+// columns. Shared by the bulk sync and metafield write-through.
+function reproSettingsToColumns(raw) {
+  const parsed = typeof raw === "string" ? safeParseJson(raw) : raw;
+  if (!parsed) {
+    return { reproRunSize: null, reproMoq: null, reproRunCost: null, reproToolingNotes: null };
+  }
+  return {
+    reproRunSize: Number.isFinite(parseInt(parsed.run_size)) ? parseInt(parsed.run_size) : null,
+    reproMoq: Number.isFinite(parseInt(parsed.moq)) ? parseInt(parsed.moq) : null,
+    reproRunCost: Number.isFinite(parseFloat(parsed.run_cost)) ? parseFloat(parsed.run_cost) : null,
+    reproToolingNotes: parsed.tooling_notes || null,
+  };
 }
 
 export async function upsertVariantSources(shop, variantId, raw) {
@@ -91,7 +112,19 @@ export async function upsertVariantSources(shop, variantId, raw) {
 // supplier_data (e.g. a products/update webhook payload), so an update never
 // clobbers a value it doesn't actually know.
 export async function upsertVariantMirror(shop, fields) {
-  const { id, sku, title, inventoryQuantity, inventoryItemId, product, supplierDataRaw } = fields;
+  const {
+    id,
+    sku,
+    title,
+    inventoryQuantity,
+    inventoryItemId,
+    product,
+    supplierDataRaw,
+    sourcingType,
+    reproSettingsRaw,
+  } = fields;
+  const reproColumns =
+    reproSettingsRaw !== undefined ? reproSettingsToColumns(reproSettingsRaw) : undefined;
 
   if (product?.id) {
     await prisma.product.upsert({
@@ -122,6 +155,8 @@ export async function upsertVariantMirror(shop, fields) {
       inventoryQuantity: inventoryQuantity ?? 0,
       inventoryItemId: inventoryItemId ?? null,
       supplierDataRaw: supplierDataRaw ?? undefined,
+      sourcingType: sourcingType ?? null,
+      ...(reproColumns ?? {}),
     },
     update: {
       ...(product?.id !== undefined ? { productId: product.id } : {}),
@@ -130,6 +165,8 @@ export async function upsertVariantMirror(shop, fields) {
       ...(inventoryQuantity !== undefined ? { inventoryQuantity } : {}),
       ...(inventoryItemId !== undefined ? { inventoryItemId } : {}),
       ...(supplierDataRaw !== undefined ? { supplierDataRaw } : {}),
+      ...(sourcingType !== undefined ? { sourcingType } : {}),
+      ...(reproColumns ?? {}),
     },
   });
 
@@ -149,6 +186,20 @@ export async function writeThroughSupplierData(shop, variantId, rawSupplierDataJ
     data: { supplierDataRaw: parsed ?? undefined },
   });
   await upsertVariantSources(shop, variantId, parsed);
+}
+
+// Write-through helper for api.sourcing-type.js: only touches the sourcing
+// mirror columns, since that endpoint doesn't have full product/variant
+// context. No-op if the variant row doesn't exist yet — the next bulk sync
+// catches it up.
+export async function writeThroughSourcingType(shop, variantId, sourcingType, reproSettings) {
+  await prisma.variant.updateMany({
+    where: { id: variantId, shop },
+    data: {
+      sourcingType: sourcingType || null,
+      ...reproSettingsToColumns(reproSettings || null),
+    },
+  });
 }
 
 export async function deleteVariantMirror(id) {
@@ -239,6 +290,8 @@ async function flushVariantBatch(shop, nodes) {
       inventoryItemId: node.inventoryItem?.id || null,
       product: node.product,
       supplierDataRaw: node.metafield?.value ? safeParseJson(node.metafield.value) : null,
+      sourcingType: node.sourcingType?.value || null,
+      reproSettingsRaw: node.reproSettings?.value ? safeParseJson(node.reproSettings.value) : null,
     });
   }
 }

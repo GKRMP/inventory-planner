@@ -69,6 +69,11 @@ model Variant {
   inventoryQuantity Int      @default(0)
   inventoryItemId   String? // inventory item GID; needed for inventory webhooks + PO receiving
   supplierDataRaw   Json? // verbatim mirror of the inventory.supplier_data metafield value
+  sourcingType      String? // "nos" | "repro" | "resale" — mirror of inventory.sourcing_type metafield
+  reproRunSize      Int? // mirror of inventory.repro_settings.run_size
+  reproMoq          Int? // mirror of inventory.repro_settings.moq
+  reproRunCost      Float? // mirror of inventory.repro_settings.run_cost
+  reproToolingNotes String? // mirror of inventory.repro_settings.tooling_notes
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -77,6 +82,7 @@ model Variant {
 
   @@index([shop, sku])
   @@index([shop, productId])
+  @@index([shop, sourcingType])
 }
 
 // One row per entry in a variant's supplier_data array. supplierId is a soft

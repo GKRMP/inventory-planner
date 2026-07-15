@@ -130,6 +130,10 @@ function transformRows(rows) {
     last_order_cpu: parseFloat(row["LastOrderCPU"]) || 0,
     last_order_quantity: parseInt(row["LastOrderQty"]) || 0,
     notes: row["Notes"] || "",
+    sourcing_type: (row["SourcingType"] || "").toLowerCase() || "",
+    repro_run_size: parseInt(row["ReproRunSize"]) || 0,
+    repro_moq: parseInt(row["ReproMoq"]) || 0,
+    repro_run_cost: parseFloat(row["ReproRunCost"]) || 0,
   }));
 }
 
@@ -207,10 +211,14 @@ export default function ImportPage() {
   };
 
   // Validate parsed data
+  const VALID_SOURCING_TYPES = ["nos", "repro", "resale", ""];
   const validationIssues = parsedData.map((row) => {
     const issues = [];
     if (!supplierIds.has(row.supplier_id)) {
       issues.push(`Unknown supplier ID: ${row.supplier_id}`);
+    }
+    if (!VALID_SOURCING_TYPES.includes(row.sourcing_type)) {
+      issues.push(`Invalid SourcingType: ${row.sourcing_type}`);
     }
     return { ...row, issues };
   });
@@ -236,7 +244,10 @@ export default function ImportPage() {
 
               <Banner tone="info">
                 <Text variant="bodyMd" as="p">
-                  <strong>CSV Format:</strong> SKU, SupplierID, MPN, IsPrimary, LeadTime, Threshold, DailyDemand, LastOrderDate, LastOrderCPU, LastOrderQty, Notes
+                  <strong>CSV Format:</strong> SKU, SupplierID, MPN, IsPrimary, LeadTime, Threshold, DailyDemand, LastOrderDate, LastOrderCPU, LastOrderQty, Notes, SourcingType, ReproRunSize, ReproMoq, ReproRunCost
+                </Text>
+                <Text variant="bodySm" as="p" tone="subdued">
+                  SourcingType and the Repro* columns are optional. SourcingType must be nos, repro, or resale.
                 </Text>
               </Banner>
 
