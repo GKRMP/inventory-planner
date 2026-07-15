@@ -87,6 +87,9 @@ function variantToShape(v) {
     productStatus: v.product?.status || "ACTIVE",
     vendor: v.product?.vendor || "",
     inventoryQuantity: v.inventoryQuantity || 0,
+    velocity30: v.velocity30 || 0,
+    velocity90: v.velocity90 || 0,
+    velocity365: v.velocity365 || 0,
     metafields,
   };
 }
@@ -162,8 +165,10 @@ export async function getSyncStatus(shop) {
     productCount,
     supplierCount,
     lastFullSyncAt: syncState?.lastFullSyncAt ?? null,
+    lastOrdersSyncAt: syncState?.lastOrdersSyncAt ?? null,
     bulkStatus: syncState?.bulkStatus ?? null,
     bulkOperationId: syncState?.bulkOperationId ?? null,
+    bulkOperationType: syncState?.bulkOperationType ?? null,
     error: syncState?.error ?? null,
   };
 }

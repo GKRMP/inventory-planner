@@ -150,7 +150,15 @@ function enrichVariant(variant, supplierMap) {
   }
 
   const primary = sources.find((s) => s.primary) || sources[0];
-  const demand = primary?.dailyDemand || 0;
+  // Demand: a manually-keyed daily_demand on the primary source always wins
+  // (merchant knowledge trumps the model). Otherwise fall back to a computed
+  // blend of order-history velocity — recent sales weighted most heavily,
+  // long-run velocity smoothing out seasonal noise.
+  const computedDemand =
+    0.5 * (variant.velocity30 || 0) + 0.3 * (variant.velocity90 || 0) + 0.2 * (variant.velocity365 || 0);
+  const manualDemand = primary?.dailyDemand || 0;
+  const demandIsOverride = manualDemand > 0;
+  const demand = demandIsOverride ? manualDemand : computedDemand;
   const threshold = primary?.threshold || 0;
   const dts = demand > 0 ? Math.floor((onHand - threshold) / demand) : 999;
   const risk = riskOf(onHand, dts);
@@ -237,6 +245,9 @@ function enrichVariant(variant, supplierMap) {
     sourcingType,
     isNOS: false,
     isRepro,
+    demandIsOverride,
+    computedDemand,
+    computedDemandStr: computedDemand.toFixed(1),
   };
 }
 
@@ -2617,7 +2628,14 @@ export default function Dashboard() {
               >
                 {[
                   { val: detail.onHand, lbl: "on hand" },
-                  { val: detail.demandStr, lbl: "per day" },
+                  {
+                    val: detail.demandStr,
+                    lbl: detail.isNOS
+                      ? "per day"
+                      : detail.demandIsOverride
+                      ? "per day · manual"
+                      : "per day · computed",
+                  },
                   { val: detail.dtsLabel, lbl: "to stockout", color: detail.risk.text },
                   { val: detail.reorderPoint, lbl: "reorder pt" },
                 ].map(({ val, lbl, color }) => (

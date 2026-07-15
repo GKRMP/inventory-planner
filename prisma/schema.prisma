@@ -74,15 +74,40 @@ model Variant {
   reproMoq          Int? // mirror of inventory.repro_settings.moq
   reproRunCost      Float? // mirror of inventory.repro_settings.run_cost
   reproToolingNotes String? // mirror of inventory.repro_settings.tooling_notes
+  velocity30        Float? // avg units/day, trailing 30 days — from VariantSalesDay via recomputeVelocities
+  velocity90        Float? // avg units/day, trailing 90 days
+  velocity365       Float? // avg units/day, trailing 365 days
+  velocityUpdatedAt DateTime? // last time recomputeVelocities touched this row
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  product Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
-  sources VariantSource[]
+  product   Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sources   VariantSource[]
+  salesDays VariantSalesDay[]
 
   @@index([shop, sku])
   @@index([shop, productId])
   @@index([shop, sourcingType])
+}
+
+// Daily sales aggregate per variant, built by the orders bulk-op backfill
+// (app/services/demand.server.js) and kept warm by the orders/create webhook.
+// Raw order/line-item data isn't stored — only the day-level rollup that
+// recomputeVelocities reads to derive Variant.velocity30/90/365.
+model VariantSalesDay {
+  id        String   @id @default(cuid())
+  shop      String
+  variantId String
+  date      DateTime @db.Date
+  qty       Int      @default(0)
+  revenue   Float    @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  variant Variant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([shop, variantId, date])
+  @@index([shop, date])
 }
 
 // One row per entry in a variant's supplier_data array. supplierId is a soft
@@ -114,14 +139,16 @@ model VariantSource {
 }
 
 model SyncState {
-  id              String    @id @default(cuid())
-  shop            String    @unique
-  bulkOperationId String?
-  bulkStatus      String?
-  lastFullSyncAt  DateTime?
-  locationId      String? // primary location GID, captured during sync for future PO receiving
-  error           String?
-  updatedAt       DateTime  @updatedAt
+  id                String    @id @default(cuid())
+  shop              String    @unique
+  bulkOperationId   String?
+  bulkStatus        String?
+  bulkOperationType String? // "catalog" | "orders" — which query the in-flight/last bulkOperationId ran, since only one bulk op may run per shop at a time and the finish webhook doesn't say which
+  lastFullSyncAt    DateTime?
+  lastOrdersSyncAt  DateTime? // last time the orders backfill bulk op completed
+  locationId        String? // primary location GID, captured during sync for future PO receiving
+  error             String?
+  updatedAt         DateTime  @updatedAt
 }
 
 model Session {

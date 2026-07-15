@@ -1,4 +1,5 @@
 import { startBulkSync, completeBulkSync } from "../services/sync.server";
+import { startOrdersBulkSync, completeOrdersBulkSync, recomputeVelocities } from "../services/demand.server";
 import { getSyncStatus } from "../services/catalog-queries.server";
 import { resolveAdminAndShop } from "../services/cron-auth.server";
 
@@ -27,6 +28,23 @@ export async function action({ request }) {
     if (intent === "complete") {
       const result = await completeBulkSync(admin, shop);
       return Response.json(result);
+    }
+
+    // Manual/testing entry points for the orders half of the sync — normally
+    // reached automatically via the bulk_operations/finish webhook chain
+    // (catalog completes → orders backfill starts → orders completes →
+    // recomputeVelocities), so these aren't needed by the nightly cron.
+    if (intent === "start-orders") {
+      const result = await startOrdersBulkSync(admin, shop);
+      return Response.json(result);
+    }
+    if (intent === "complete-orders") {
+      const result = await completeOrdersBulkSync(admin, shop);
+      return Response.json(result);
+    }
+    if (intent === "recompute-velocities") {
+      await recomputeVelocities(shop);
+      return Response.json({ ok: true });
     }
 
     const result = await startBulkSync(admin, shop);

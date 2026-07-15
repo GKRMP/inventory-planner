@@ -17,6 +17,7 @@ const EXPECTED = [
   { topic: "PRODUCTS_DELETE", path: "/webhooks/products/delete" },
   { topic: "INVENTORY_LEVELS_UPDATE", path: "/webhooks/inventory_levels/update" },
   { topic: "BULK_OPERATIONS_FINISH", path: "/webhooks/bulk_operations/finish" },
+  { topic: "ORDERS_CREATE", path: "/webhooks/orders/create" },
 ];
 
 function callbackUrlFor(appUrl, path) {

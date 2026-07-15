@@ -50,6 +50,16 @@ function getReproSettings(variant) {
     return null;
   }
 }
+
+// Same blend as app.dashboard.jsx's enrichVariant: recent order-history
+// velocity weighted most heavily, used whenever no manual daily_demand
+// override is set on the primary supplier source.
+function getComputedDemand(variant) {
+  if (!variant) return 0;
+  return (
+    0.5 * (variant.velocity30 || 0) + 0.3 * (variant.velocity90 || 0) + 0.2 * (variant.velocity365 || 0)
+  );
+}
 import { TitleBar } from "@shopify/app-bridge-react";
 import AppNavigation from "../components/AppNavigation";
 import { loadCatalogForRoute } from "../services/catalog-queries.server";
@@ -763,7 +773,10 @@ export default function ProductsPage() {
                       <Text as="span" fontWeight="semibold">Threshold:</Text> {sup.threshold}
                     </Text>
                     <Text variant="bodySm" as="span">
-                      <Text as="span" fontWeight="semibold">Daily Demand:</Text> {sup.daily_demand}
+                      <Text as="span" fontWeight="semibold">Daily Demand:</Text>{" "}
+                      {sup.is_primary && !(parseFloat(sup.daily_demand) > 0)
+                        ? `${getComputedDemand(selectedVariant).toFixed(2)} (computed)`
+                        : sup.daily_demand}
                     </Text>
                   </InlineStack>
 
@@ -842,7 +855,18 @@ export default function ProductsPage() {
                       onChange={(v) => setForm({ ...form, daily_demand: v })}
                       min="0"
                       step="0.01"
-                      helpText="Average number sold per day"
+                      helpText={
+                        parseFloat(form.daily_demand) > 0
+                          ? `Manual override — computed from order history is ${getComputedDemand(selectedVariant).toFixed(2)}/day`
+                          : `Average number sold per day — leave blank to use the computed value (${getComputedDemand(selectedVariant).toFixed(2)}/day from order history)`
+                      }
+                      connectedRight={
+                        parseFloat(form.daily_demand) > 0 ? (
+                          <Button size="slim" onClick={() => setForm({ ...form, daily_demand: "" })}>
+                            Clear override
+                          </Button>
+                        ) : undefined
+                      }
                     />
                   </div>
                 </InlineStack>
