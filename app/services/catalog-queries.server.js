@@ -94,3 +94,25 @@ export async function getVariantsWithSources(shop, { search = "", supplierId = "
 export async function getSyncState(shop) {
   return prisma.syncState.findUnique({ where: { shop } });
 }
+
+// Cheap health check for the sync — counts + last-run state, no DB shell
+// access required. Backs the GET /api/sync?intent=status endpoint.
+export async function getSyncStatus(shop) {
+  const [syncState, variantCount, productCount, supplierCount] = await Promise.all([
+    prisma.syncState.findUnique({ where: { shop } }),
+    prisma.variant.count({ where: { shop } }),
+    prisma.product.count({ where: { shop } }),
+    prisma.supplier.count({ where: { shop } }),
+  ]);
+
+  return {
+    shop,
+    variantCount,
+    productCount,
+    supplierCount,
+    lastFullSyncAt: syncState?.lastFullSyncAt ?? null,
+    bulkStatus: syncState?.bulkStatus ?? null,
+    bulkOperationId: syncState?.bulkOperationId ?? null,
+    error: syncState?.error ?? null,
+  };
+}
