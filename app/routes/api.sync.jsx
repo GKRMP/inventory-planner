@@ -1,5 +1,6 @@
 import { authenticate, unauthenticated } from "../shopify.server";
 import { startBulkSync, completeBulkSync } from "../services/sync.server";
+import { getSyncStatus } from "../services/catalog-queries.server";
 
 // Triggers a full catalog bulk sync. Called either from the embedded admin
 // (manual "Sync now" button, session-authenticated) or by the Render Cron
@@ -19,6 +20,22 @@ async function resolveAdminAndShop(request) {
 
   const { admin, session } = await authenticate.admin(request);
   return { admin, shop: session.shop };
+}
+
+// GET /api/sync?shop=xxx.myshopify.com&intent=status — cheap health check
+// (row counts + last sync state) without needing database shell access.
+// Same auth rules as the POST action: x-sync-secret header, or embedded
+// admin session.
+export async function loader({ request }) {
+  const { shop } = await resolveAdminAndShop(request);
+
+  try {
+    const status = await getSyncStatus(shop);
+    return Response.json(status);
+  } catch (error) {
+    console.error(`Sync status error for ${shop}:`, error);
+    return Response.json({ error: error.message || "Failed to load sync status" }, { status: 500 });
+  }
 }
 
 export async function action({ request }) {
