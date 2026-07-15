@@ -1,4 +1,24 @@
 import { authenticate } from "../shopify.server";
+import { upsertSupplierMirror, deleteSupplierMirror } from "../services/sync.server";
+
+// Mirror writes are best-effort: the metaobject mutation already committed
+// by the time we get here, so a mirror failure should never fail the
+// request — log it and let the nightly reconcile heal the drift.
+async function mirrorSupplierWrite(shop, id, fields) {
+  try {
+    await upsertSupplierMirror(shop, { id, fields });
+  } catch (error) {
+    console.error(`Supplier mirror write-through failed for ${shop}:`, error);
+  }
+}
+
+async function mirrorSupplierDelete(id) {
+  try {
+    await deleteSupplierMirror(id);
+  } catch (error) {
+    console.error(`Supplier mirror delete write-through failed:`, error);
+  }
+}
 
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
@@ -29,7 +49,7 @@ export async function loader({ request }) {
 }
 
 export async function action({ request }) {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const form = await request.formData();
   const intent = form.get("intent");
 
@@ -74,7 +94,14 @@ export async function action({ request }) {
     `;
 
     const response = await admin.graphql(mutation, { variables: { fields } });
-    return await response.json();
+    const result = await response.json();
+
+    const createdId = result?.data?.metaobjectCreate?.metaobject?.id;
+    if (createdId && !result?.data?.metaobjectCreate?.userErrors?.length) {
+      await mirrorSupplierWrite(session.shop, createdId, fields);
+    }
+
+    return result;
   }
 
   if (intent === "update") {
@@ -99,7 +126,13 @@ export async function action({ request }) {
     `;
 
     const response = await admin.graphql(mutation, { variables: { id, fields } });
-    return await response.json();
+    const result = await response.json();
+
+    if (!result?.data?.metaobjectUpdate?.userErrors?.length) {
+      await mirrorSupplierWrite(session.shop, id, fields);
+    }
+
+    return result;
   }
 
   if (intent === "delete") {
@@ -115,7 +148,13 @@ export async function action({ request }) {
     `;
 
     const response = await admin.graphql(mutation, { variables: { id } });
-    return await response.json();
+    const result = await response.json();
+
+    if (result?.data?.metaobjectDelete?.deletedId) {
+      await mirrorSupplierDelete(id);
+    }
+
+    return result;
   }
 
   return { error: "Unknown intent" };

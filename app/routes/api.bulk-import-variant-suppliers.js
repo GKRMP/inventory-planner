@@ -1,4 +1,5 @@
 import { authenticate } from "../shopify.server";
+import { writeThroughSupplierData } from "../services/sync.server";
 
 /**
  * Bulk Import Variant-Supplier Relationships API Endpoint
@@ -33,7 +34,7 @@ import { authenticate } from "../shopify.server";
  */
 
 export async function action({ request }) {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
 
   try {
     const body = await request.json();
@@ -256,6 +257,11 @@ export async function action({ request }) {
             error: metafieldData.data.metafieldsSet.userErrors.map(e => e.message).join(", ")
           });
         } else {
+          try {
+            await writeThroughSupplierData(session.shop, variant.id, JSON.stringify(supplierDataList));
+          } catch (mirrorError) {
+            console.error(`Mirror write-through failed for ${sku}:`, mirrorError);
+          }
           results.success.push({
             sku,
             variantId: variant.id,

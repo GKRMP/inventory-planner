@@ -13,22 +13,127 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Session {
-  id            String    @id
+// ─── Postgres mirror of Shopify catalog + supplier data ────────────────────
+// Metafields/metaobjects in Shopify remain the source of truth. These models
+// are a read-cache populated by a nightly bulk-op sync (app/services/sync.server.js)
+// and kept warm by webhooks + write-through on saves. A failed mirror write is
+// logged and non-fatal — the nightly reconcile heals any drift.
+
+model Supplier {
+  id             String   @id // metaobject GID
+  shop           String
+  supplierId     String // business key stored in the "supplier_id" metaobject field
+  name           String
+  specializedMfg Boolean  @default(false)
+  contactName    String?
+  contactName2   String?
+  address        String?
+  address2       String?
+  city           String?
+  state          String?
+  zip            String?
+  country        String?
+  phone1         String?
+  phone2         String?
+  email1         String?
+  email2         String?
+  website        String?
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([shop, supplierId])
+  @@index([shop])
+}
+
+model Product {
+  id        String   @id // product GID
+  shop      String
+  title     String
+  status    String
+  vendor    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  variants Variant[]
+
+  @@index([shop, status])
+}
+
+model Variant {
+  id                String   @id // variant GID
+  shop              String
+  productId         String
+  sku               String?
+  title             String?
+  inventoryQuantity Int      @default(0)
+  inventoryItemId   String? // inventory item GID; needed for inventory webhooks + PO receiving
+  supplierDataRaw   Json? // verbatim mirror of the inventory.supplier_data metafield value
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  product Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sources VariantSource[]
+
+  @@index([shop, sku])
+  @@index([shop, productId])
+}
+
+// One row per entry in a variant's supplier_data array. supplierId is a soft
+// reference to Supplier.supplierId (the business key stored in the metafield
+// JSON, not Supplier's GID primary key) — kept as a plain indexed column
+// rather than a DB-level FK since sync/webhook ordering can't guarantee the
+// referenced supplier metaobject has already been mirrored.
+model VariantSource {
+  id            String   @id @default(cuid())
   shop          String
-  state         String
-  isOnline      Boolean   @default(false)
-  scope         String?
-  expires       DateTime?
-  accessToken   String
-  userId        BigInt?
-  firstName     String?
-  lastName      String?
-  email         String?
-  accountOwner  Boolean   @default(false)
-  locale        String?
-  collaborator  Boolean?  @default(false)
-  emailVerified Boolean?  @default(false)
+  variantId     String
+  supplierId    String?
+  mpn           String?
+  isPrimary     Boolean  @default(false)
+  leadTime      Int?
+  threshold     Int?
+  dailyDemand   Float?
+  lastOrderDate String?
+  lastOrderCpu  Float?
+  lastOrderQty  Int?
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  variant Variant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@index([shop, variantId])
+  @@index([shop, supplierId])
+}
+
+model SyncState {
+  id              String    @id @default(cuid())
+  shop            String    @unique
+  bulkOperationId String?
+  bulkStatus      String?
+  lastFullSyncAt  DateTime?
+  locationId      String? // primary location GID, captured during sync for future PO receiving
+  error           String?
+  updatedAt       DateTime  @updatedAt
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
