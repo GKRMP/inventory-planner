@@ -13,9 +13,13 @@ import {
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { useState, useMemo, useCallback } from "react";
+import { useLoaderData, useRevalidator } from "react-router";
 import AppNavigation from "../components/AppNavigation";
-import ProductsLoadingIndicator from "../components/ProductsLoadingIndicator";
-import { useProducts } from "../context/ProductsContext";
+import { loadCatalogForRoute } from "../services/catalog-queries.server";
+
+export async function loader({ request }) {
+  return loadCatalogForRoute(request);
+}
 
 // Helper function to get metafield value
 function getMetafieldValue(metafields, namespace, key) {
@@ -124,7 +128,9 @@ function calculateMetrics(variant, suppliers) {
 }
 
 export default function Report() {
-  const { variants, suppliers, isLoading } = useProducts();
+  const { variants, suppliers } = useLoaderData();
+  const revalidator = useRevalidator();
+  const isLoading = revalidator.state === "loading";
   const [queryValue, setQueryValue] = useState("");
   const [riskFilter, setRiskFilter] = useState([]);
   const [selectedTab, setSelectedTab] = useState(0);
@@ -433,7 +439,6 @@ export default function Report() {
           {/* Client-side Pagination */}
           {totalPages > 1 && (
             <InlineStack align="center" gap="400">
-              <ProductsLoadingIndicator />
               <Text variant="bodySm" as="span" tone="subdued">
                 Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredAndSortedVariants.length)} of {filteredAndSortedVariants.length} products
               </Text>
@@ -448,7 +453,6 @@ export default function Report() {
 
           {totalPages <= 1 && filteredAndSortedVariants.length > 0 && (
             <InlineStack align="center" gap="300">
-              <ProductsLoadingIndicator />
               <Text variant="bodySm" as="span" tone="subdued">
                 Showing {filteredAndSortedVariants.length} products
               </Text>

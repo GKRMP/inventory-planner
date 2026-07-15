@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
-import { useRevalidator } from "react-router";
+import { useRevalidator, useLoaderData } from "react-router";
 import {
   Page,
   Card,
@@ -21,12 +21,16 @@ import {
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import AppNavigation from "../components/AppNavigation";
-import ProductsLoadingIndicator from "../components/ProductsLoadingIndicator";
-import { useProducts } from "../context/ProductsContext";
+import { loadCatalogForRoute } from "../services/catalog-queries.server";
+
+export async function loader({ request }) {
+  return loadCatalogForRoute(request);
+}
 
 export default function ProductsPage() {
-  const { variants, suppliers, isLoading } = useProducts();
+  const { variants, suppliers } = useLoaderData();
   const revalidator = useRevalidator();
+  const isLoading = revalidator.state === "loading";
 
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedVariant, setSelectedVariant] = useState(null);
@@ -424,7 +428,7 @@ export default function ProductsPage() {
                 { title: "Actions" },
               ]}
               selectable={false}
-              loading={isLoading || revalidator.state === "loading"}
+              loading={isLoading}
               sortable={[true, true, true, false, true, true, false]}
               sortDirection={sortDirection}
               sortColumnIndex={
@@ -476,7 +480,6 @@ export default function ProductsPage() {
           {/* Client-side Pagination */}
           {totalPages > 1 && (
             <InlineStack align="center" gap="400">
-              <ProductsLoadingIndicator />
               <Text variant="bodySm" as="span" tone="subdued">
                 Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, filteredAndSortedVariants.length)} of {filteredAndSortedVariants.length} variants
               </Text>
@@ -491,7 +494,6 @@ export default function ProductsPage() {
 
           {totalPages <= 1 && filteredAndSortedVariants.length > 0 && (
             <InlineStack align="center" gap="300">
-              <ProductsLoadingIndicator />
               <Text variant="bodySm" as="span" tone="subdued">
                 Showing {filteredAndSortedVariants.length} variants
               </Text>

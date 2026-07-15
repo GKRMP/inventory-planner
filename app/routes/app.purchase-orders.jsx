@@ -12,7 +12,12 @@ import {
   TextField,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
-import { useProducts } from "../context/ProductsContext";
+import { useLoaderData } from "react-router";
+import { loadCatalogForRoute } from "../services/catalog-queries.server";
+
+export async function loader({ request }) {
+  return loadCatalogForRoute(request);
+}
 
 // Helper function to get metafield value
 function getMetafieldValue(metafields, namespace, key) {
@@ -23,7 +28,7 @@ function getMetafieldValue(metafields, namespace, key) {
 }
 
 export default function PurchaseOrdersPage() {
-  const { variants, suppliers } = useProducts();
+  const { variants, suppliers } = useLoaderData();
 
   const [selectedSupplier, setSelectedSupplier] = useState("");
   const [searchQuery, setSearchQuery] = useState("");

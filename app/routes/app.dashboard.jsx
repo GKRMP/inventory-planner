@@ -1,6 +1,10 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
-import { useFetcher } from "react-router";
-import { useProducts } from "../context/ProductsContext";
+import { useFetcher, useLoaderData, useRevalidator } from "react-router";
+import { loadCatalogForRoute } from "../services/catalog-queries.server";
+
+export async function loader({ request }) {
+  return loadCatalogForRoute(request);
+}
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -176,8 +180,11 @@ const MONO = { fontFamily: "'IBM Plex Mono', monospace" };
 // ─── component ───────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const { variants, suppliers, isLoading, refreshProducts, refreshSuppliers } =
-    useProducts();
+  const { variants, suppliers, syncPending } = useLoaderData();
+  const revalidator = useRevalidator();
+  const isLoading = revalidator.state === "loading";
+  const refreshProducts = useCallback(() => revalidator.revalidate(), [revalidator]);
+  const refreshSuppliers = refreshProducts;
 
   const [screen, setScreen] = useState("dashboard");
   const [search, setSearch] = useState("");
@@ -971,6 +978,25 @@ export default function Dashboard() {
           }}
         >
           <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+
+            {/* SYNC PENDING — mirror has never completed a first sync */}
+            {!isLoading && syncPending && variants.length === 0 && (
+              <div style={{ padding: "24px 28px" }}>
+                <div
+                  style={{
+                    background: "#fff",
+                    border: "1px solid #e8e6e0",
+                    borderRadius: 13,
+                    padding: "20px 22px",
+                    color: "#56524b",
+                    fontSize: 13.5,
+                  }}
+                >
+                  No catalog data yet — the first sync hasn&apos;t completed. It runs nightly, or
+                  trigger it now with a POST to <code>/api/sync</code>.
+                </div>
+              </div>
+            )}
 
             {/* LOADING SKELETON */}
             {isLoading && (

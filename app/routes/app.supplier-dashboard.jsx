@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate, useLoaderData, useRevalidator } from "react-router";
 import {
   Page,
   Card,
@@ -11,8 +11,11 @@ import {
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import AppNavigation from "../components/AppNavigation";
-import ProductsLoadingIndicator from "../components/ProductsLoadingIndicator";
-import { useProducts } from "../context/ProductsContext";
+import { loadCatalogForRoute } from "../services/catalog-queries.server";
+
+export async function loader({ request }) {
+  return loadCatalogForRoute(request);
+}
 
 // Helper function to get metafield value
 function getMetafieldValue(metafields, namespace, key) {
@@ -23,7 +26,9 @@ function getMetafieldValue(metafields, namespace, key) {
 }
 
 export default function SupplierDashboard() {
-  const { variants, suppliers, isLoading } = useProducts();
+  const { variants, suppliers } = useLoaderData();
+  const revalidator = useRevalidator();
+  const isLoading = revalidator.state === "loading";
   const navigate = useNavigate();
   const [sortColumn, setSortColumn] = useState("totalVariants");
   const [sortDirection, setSortDirection] = useState("descending");
@@ -193,11 +198,6 @@ export default function SupplierDashboard() {
       <Page fullWidth>
         <BlockStack gap="400">
           <AppNavigation />
-
-          {/* Loading indicator in header */}
-          <InlineStack align="end">
-            <ProductsLoadingIndicator />
-          </InlineStack>
 
           <InlineStack gap="400" wrap>
             <Card background="bg-surface-secondary">
