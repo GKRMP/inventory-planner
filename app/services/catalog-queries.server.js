@@ -42,26 +42,52 @@ export async function getSuppliers(shop) {
 
 // Reconstructs the variant shape enrichVariant/getSupplierData already
 // expect: {id, sku, variantTitle, productTitle, productStatus,
-// inventoryQuantity, metafields}, synthesizing a single "supplier_data"
-// metafield from the mirrored JSON column.
+// inventoryQuantity, metafields}, synthesizing "supplier_data",
+// "sourcing_type" and "repro_settings" metafields from their mirrored columns.
 function variantToShape(v) {
+  const metafields = [];
+
+  if (v.supplierDataRaw) {
+    metafields.push({
+      id: `${v.id}-supplier_data`,
+      namespace: "inventory",
+      key: "supplier_data",
+      value: JSON.stringify(v.supplierDataRaw),
+    });
+  }
+
+  if (v.sourcingType) {
+    metafields.push({
+      id: `${v.id}-sourcing_type`,
+      namespace: "inventory",
+      key: "sourcing_type",
+      value: v.sourcingType,
+    });
+  }
+
+  if (v.sourcingType === "repro") {
+    metafields.push({
+      id: `${v.id}-repro_settings`,
+      namespace: "inventory",
+      key: "repro_settings",
+      value: JSON.stringify({
+        run_size: v.reproRunSize,
+        moq: v.reproMoq,
+        run_cost: v.reproRunCost,
+        tooling_notes: v.reproToolingNotes,
+      }),
+    });
+  }
+
   return {
     id: v.id,
     sku: v.sku || "",
     variantTitle: v.title || "",
     productTitle: v.product?.title || "Unknown",
     productStatus: v.product?.status || "ACTIVE",
+    vendor: v.product?.vendor || "",
     inventoryQuantity: v.inventoryQuantity || 0,
-    metafields: v.supplierDataRaw
-      ? [
-          {
-            id: `${v.id}-supplier_data`,
-            namespace: "inventory",
-            key: "supplier_data",
-            value: JSON.stringify(v.supplierDataRaw),
-          },
-        ]
-      : [],
+    metafields,
   };
 }
 

@@ -21,6 +21,25 @@ function getSupplierData(variant) {
   }
 }
 
+function getSourcingType(variant) {
+  const mf = variant.metafields.find(
+    (m) => m.namespace === "inventory" && m.key === "sourcing_type"
+  );
+  return mf?.value || null;
+}
+
+function getReproSettings(variant) {
+  const mf = variant.metafields.find(
+    (m) => m.namespace === "inventory" && m.key === "repro_settings"
+  );
+  if (!mf) return null;
+  try {
+    return JSON.parse(mf.value);
+  } catch {
+    return null;
+  }
+}
+
 function riskOf(onHand, dts) {
   if (onHand <= 0)
     return { key: "out", label: "Out of stock", text: "#912018", bg: "#fee4e2", dot: "#b42318" };
@@ -47,8 +66,14 @@ function money0(n) {
 }
 
 function enrichVariant(variant, supplierMap) {
+  const sourcingType = getSourcingType(variant);
+  const isNOS = sourcingType === "nos";
+  const isRepro = sourcingType === "repro";
+
   const rawSources = getSupplierData(variant);
-  if (rawSources.length === 0) return null;
+  // NOS stock is largely uncataloged barn stock — it must still show up
+  // (for scarcity signals) even with zero supplier_data rows.
+  if (rawSources.length === 0 && !isNOS) return null;
 
   const sources = rawSources.map((s) => {
     const sup = supplierMap[s.supplier_id] || {
@@ -69,10 +94,64 @@ function enrichVariant(variant, supplierMap) {
     };
   });
 
+  const onHand = variant.inventoryQuantity || 0;
+
+  // ── NOS: finite, irreplaceable stock. No reorder-point logic — just
+  // scarcity signals (last-one, gone-forever). Kept out of reorder alerts by
+  // using risk keys ("nos-*") that don't match the standard out/critical/etc.
+  // buckets used to build attention/reorderList/counts elsewhere.
+  if (isNOS) {
+    const primary = sources.find((s) => s.primary) || sources[0] || null;
+    const lastOne = onHand === 1;
+    const goneForever = onHand <= 0;
+    const risk = goneForever
+      ? { key: "nos-gone", label: "Gone forever", text: "#912018", bg: "#fee4e2", dot: "#b42318" }
+      : lastOne
+      ? { key: "nos-last", label: "Last one", text: "#b54708", bg: "#fffaeb", dot: "#f79009" }
+      : { key: "nos-available", label: "NOS in stock", text: "#175cd3", bg: "#eff8ff", dot: "#2e90fa" };
+    const recommended = primary || { sup: null, cpu: 0, lead: 0, supplierName: "N/A", code: "NOS" };
+
+    return {
+      id: variant.id,
+      sku: variant.sku || "N/A",
+      name: variant.productTitle || "Unknown",
+      onHand,
+      demand: 0,
+      threshold: 0,
+      sources,
+      primary,
+      recommended,
+      reason: "NOS — no reorder",
+      reorderPoint: null,
+      suggestedQty: null,
+      savingsPerUnit: 0,
+      leadDiff: 0,
+      dts: null,
+      risk,
+      demandStr: "0.0",
+      dtsLabel: "N/A",
+      dtsWidth: "0%",
+      recommendedName: recommended.supplierName,
+      primaryName: primary?.supplierName || "N/A",
+      bestCpuStr: money(recommended.cpu || 0),
+      bestLeadStr: (recommended.lead || 0) + "d",
+      suggestedQtyStr: "—",
+      estCost: 0,
+      sourcesCount: sources.length,
+      sourceCodes: sources.map((s) => s.code).join(" · "),
+      diff: false,
+      belowReorder: false,
+      sourcingType,
+      isNOS: true,
+      isRepro: false,
+      lastOne,
+      goneForever,
+    };
+  }
+
   const primary = sources.find((s) => s.primary) || sources[0];
   const demand = primary?.dailyDemand || 0;
   const threshold = primary?.threshold || 0;
-  const onHand = variant.inventoryQuantity || 0;
   const dts = demand > 0 ? Math.floor((onHand - threshold) / demand) : 999;
   const risk = riskOf(onHand, dts);
   const urgent = risk.key === "out" || risk.key === "critical";
@@ -92,7 +171,7 @@ function enrichVariant(variant, supplierMap) {
   recommended = recommended || primary;
 
   const reorderPoint = Math.round(threshold + demand * (primary?.lead || 0));
-  const suggestedQty = Math.max(
+  let suggestedQty = Math.max(
     1,
     Math.ceil(demand * (recommended.lead || 7) * 2 + threshold - onHand)
   );
@@ -104,6 +183,26 @@ function enrichVariant(variant, supplierMap) {
   const dtsWidth =
     (onHand <= 0 || dts < 0 ? 100 : Math.max(4, Math.min(100, (dts / 45) * 100))).toFixed(0) +
     "%";
+
+  let belowReorder = onHand <= reorderPoint;
+  let estCost = suggestedQty * recommended.cpu;
+
+  // ── Repro: they own the tooling, so a "reorder" is really a production
+  // run — trigger it off the same threshold, but size it to the run/MOQ
+  // instead of a lead-time buffer, and cost it off the flat run cost.
+  if (isRepro) {
+    const repro = getReproSettings(variant) || {};
+    const runSize = parseInt(repro.run_size) || 0;
+    const moq = parseInt(repro.moq) || 0;
+    const runCost = parseFloat(repro.run_cost) || 0;
+    const rawQty = Math.max(moq, runSize, Math.ceil(demand * 180));
+    const runQty = runSize > 0 ? Math.ceil(rawQty / runSize) * runSize : rawQty;
+
+    belowReorder = onHand <= threshold;
+    suggestedQty = belowReorder ? runQty : 0;
+    estCost = runCost;
+    reason = "Repro run";
+  }
 
   return {
     id: variant.id,
@@ -130,11 +229,14 @@ function enrichVariant(variant, supplierMap) {
     bestCpuStr: money(recommended.cpu),
     bestLeadStr: recommended.lead + "d",
     suggestedQtyStr: String(suggestedQty),
-    estCost: suggestedQty * recommended.cpu,
+    estCost,
     sourcesCount: sources.length,
     sourceCodes: sources.map((s) => s.code).join(" · "),
     diff: recommended.sup !== primary?.sup,
-    belowReorder: onHand <= reorderPoint,
+    belowReorder,
+    sourcingType,
+    isNOS: false,
+    isRepro,
   };
 }
 
@@ -463,6 +565,14 @@ export default function Dashboard() {
   );
 
   const reorderList = useMemo(() => enriched.filter((e) => e.belowReorder), [enriched]);
+
+  const nosScarcity = useMemo(
+    () =>
+      enriched
+        .filter((e) => e.isNOS && (e.lastOne || e.goneForever))
+        .sort((a, b) => (a.goneForever === b.goneForever ? 0 : a.goneForever ? -1 : 1)),
+    [enriched]
+  );
 
   const reportRows = useMemo(() => {
     let rows = enriched
@@ -1479,6 +1589,81 @@ export default function Dashboard() {
                     )}
                   </div>
                 </div>
+
+                {/* NOS scarcity — last-one / gone-forever, no reorder logic applies */}
+                {nosScarcity.length > 0 && (
+                  <div
+                    style={{
+                      background: "#fff",
+                      border: "1px solid #e8e6e0",
+                      borderRadius: 13,
+                      boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+                      overflow: "hidden",
+                      marginTop: 16,
+                    }}
+                  >
+                    <div style={{ padding: "17px 20px 6px" }}>
+                      <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: "-0.2px" }}>
+                        NOS scarcity
+                      </div>
+                      <div style={{ fontSize: 12, color: "#9a968e", fontWeight: 500, marginTop: 2 }}>
+                        Irreplaceable barn stock down to its last unit — nothing to reorder
+                      </div>
+                    </div>
+                    {nosScarcity.map((n) => (
+                      <div
+                        key={n.id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 14,
+                          padding: "13px 20px",
+                          borderTop: "1px solid #f3f1ec",
+                          cursor: "pointer",
+                        }}
+                        onClick={() => openDetail(n.id)}
+                      >
+                        <span
+                          style={{
+                            width: 9,
+                            height: 9,
+                            borderRadius: "50%",
+                            flex: "none",
+                            background: n.risk.dot,
+                          }}
+                        />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div
+                            style={{
+                              fontWeight: 600,
+                              fontSize: 13.5,
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                          >
+                            {n.name}
+                          </div>
+                          <div style={{ fontSize: 12, color: "#9a968e", ...MONO }}>{n.sku}</div>
+                        </div>
+                        <div
+                          style={{
+                            ...MONO,
+                            fontWeight: 600,
+                            fontSize: 12,
+                            color: n.risk.text,
+                            background: n.risk.bg,
+                            padding: "3px 9px",
+                            borderRadius: 6,
+                            flex: "none",
+                          }}
+                        >
+                          {n.risk.label} · {n.onHand} on hand
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 

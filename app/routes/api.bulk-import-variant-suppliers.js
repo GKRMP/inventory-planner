@@ -1,5 +1,7 @@
 import { authenticate } from "../shopify.server";
-import { writeThroughSupplierData } from "../services/sync.server";
+import { writeThroughSupplierData, writeThroughSourcingType } from "../services/sync.server";
+
+const VALID_SOURCING_TYPES = ["nos", "repro", "resale"];
 
 /**
  * Bulk Import Variant-Supplier Relationships API Endpoint
@@ -51,6 +53,7 @@ export async function action({ request }) {
 
     // Group by SKU
     const groupedBySKU = {};
+    const sourcingBySKU = {};
     for (const item of variantSuppliers) {
       const sku = item.sku;
       if (!sku) continue;
@@ -71,6 +74,18 @@ export async function action({ request }) {
         last_order_quantity: parseInt(item.last_order_quantity) || 0,
         notes: item.notes || "",
       });
+
+      // sourcing_type is a per-SKU attribute — take the first non-empty
+      // occurrence across that SKU's rows.
+      const sourcingType = (item.sourcing_type || "").toLowerCase();
+      if (!sourcingBySKU[sku] && VALID_SOURCING_TYPES.includes(sourcingType)) {
+        sourcingBySKU[sku] = {
+          sourcing_type: sourcingType,
+          run_size: parseInt(item.repro_run_size) || 0,
+          moq: parseInt(item.repro_moq) || 0,
+          run_cost: parseFloat(item.repro_run_cost) || 0,
+        };
+      }
     }
 
     // Ensure only one primary per SKU
@@ -262,6 +277,47 @@ export async function action({ request }) {
           } catch (mirrorError) {
             console.error(`Mirror write-through failed for ${sku}:`, mirrorError);
           }
+
+          const sourcing = sourcingBySKU[sku];
+          if (sourcing) {
+            try {
+              const sourcingMetafields = [{
+                ownerId: variant.id,
+                namespace: "inventory",
+                key: "sourcing_type",
+                type: "single_line_text_field",
+                value: sourcing.sourcing_type,
+              }];
+              if (sourcing.sourcing_type === "repro") {
+                sourcingMetafields.push({
+                  ownerId: variant.id,
+                  namespace: "inventory",
+                  key: "repro_settings",
+                  type: "json",
+                  value: JSON.stringify({
+                    run_size: sourcing.run_size,
+                    moq: sourcing.moq,
+                    run_cost: sourcing.run_cost,
+                  }),
+                });
+              }
+              const sourcingResponse = await admin.graphql(mutation, {
+                variables: { metafields: sourcingMetafields },
+              });
+              const sourcingData = await sourcingResponse.json();
+              if (!sourcingData.data?.metafieldsSet?.userErrors?.length) {
+                await writeThroughSourcingType(
+                  session.shop,
+                  variant.id,
+                  sourcing.sourcing_type,
+                  sourcing.sourcing_type === "repro" ? sourcing : null
+                );
+              }
+            } catch (sourcingError) {
+              console.error(`Sourcing type import failed for ${sku}:`, sourcingError);
+            }
+          }
+
           results.success.push({
             sku,
             variantId: variant.id,

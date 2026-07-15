@@ -19,6 +19,37 @@ import {
   Pagination,
   Badge,
 } from "@shopify/polaris";
+
+const SOURCING_TYPE_OPTIONS = [
+  { label: "Resale", value: "resale" },
+  { label: "NOS (New Old Stock)", value: "nos" },
+  { label: "Repro (Reproduction)", value: "repro" },
+];
+
+const SOURCING_TYPE_BADGE = {
+  nos: { tone: "info", label: "NOS" },
+  repro: { tone: "attention", label: "Repro" },
+  resale: { tone: "success", label: "Resale" },
+};
+
+function getSourcingType(variant) {
+  const mf = variant.metafields.find(
+    (m) => m.namespace === "inventory" && m.key === "sourcing_type"
+  );
+  return mf?.value || null;
+}
+
+function getReproSettings(variant) {
+  const mf = variant.metafields.find(
+    (m) => m.namespace === "inventory" && m.key === "repro_settings"
+  );
+  if (!mf) return null;
+  try {
+    return JSON.parse(mf.value);
+  } catch {
+    return null;
+  }
+}
 import { TitleBar } from "@shopify/app-bridge-react";
 import AppNavigation from "../components/AppNavigation";
 import { loadCatalogForRoute } from "../services/catalog-queries.server";
@@ -53,6 +84,24 @@ export default function ProductsPage() {
   const [sortColumn, setSortColumn] = useState("sku");
   const [sortDirection, setSortDirection] = useState("ascending");
   const { mode, setMode } = useSetIndexFiltersMode(IndexFiltersMode.Filtering);
+
+  // Sourcing type: per-variant modal
+  const [sourcingModalOpen, setSourcingModalOpen] = useState(false);
+  const [sourcingVariant, setSourcingVariant] = useState(null);
+  const [sourcingForm, setSourcingForm] = useState({
+    sourcing_type: "resale",
+    run_size: "",
+    moq: "",
+    run_cost: "",
+    tooling_notes: "",
+  });
+  const [sourcingSaving, setSourcingSaving] = useState(false);
+
+  // Sourcing type: vendor bulk-set toolbar
+  const [bulkVendor, setBulkVendor] = useState("all");
+  const [bulkSourcingType, setBulkSourcingType] = useState("resale");
+  const [bulkApplying, setBulkApplying] = useState(false);
+  const [bulkResult, setBulkResult] = useState(null);
 
   // Client-side pagination
   const ITEMS_PER_PAGE = 50;
@@ -247,6 +296,86 @@ export default function ProductsPage() {
     revalidator.revalidate();
   };
 
+  const openSourcingEdit = (variant) => {
+    setSourcingVariant(variant);
+    const repro = getReproSettings(variant) || {};
+    setSourcingForm({
+      sourcing_type: getSourcingType(variant) || "resale",
+      run_size: repro.run_size?.toString() || "",
+      moq: repro.moq?.toString() || "",
+      run_cost: repro.run_cost?.toString() || "",
+      tooling_notes: repro.tooling_notes || "",
+    });
+    setSourcingModalOpen(true);
+  };
+
+  const saveSourcing = async () => {
+    if (!sourcingVariant) return;
+    setSourcingSaving(true);
+    try {
+      await fetch("/api/sourcing-type", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          variantId: sourcingVariant.id,
+          sourcingType: sourcingForm.sourcing_type,
+          reproSettings:
+            sourcingForm.sourcing_type === "repro"
+              ? {
+                  run_size: parseInt(sourcingForm.run_size) || 0,
+                  moq: parseInt(sourcingForm.moq) || 0,
+                  run_cost: parseFloat(sourcingForm.run_cost) || 0,
+                  tooling_notes: sourcingForm.tooling_notes,
+                }
+              : undefined,
+        }),
+      });
+    } finally {
+      setSourcingSaving(false);
+      setSourcingModalOpen(false);
+      setSourcingVariant(null);
+      revalidator.revalidate();
+    }
+  };
+
+  // Distinct vendors present in the catalog, for the bulk-set toolbar
+  const vendorOptions = useMemo(() => {
+    const vendors = new Set(variants.map((v) => v.vendor).filter(Boolean));
+    return [
+      { label: "All vendors", value: "all" },
+      ...Array.from(vendors)
+        .sort()
+        .map((v) => ({ label: v, value: v })),
+    ];
+  }, [variants]);
+
+  const applyBulkSourcing = async () => {
+    const targets = variants.filter((v) => bulkVendor === "all" || v.vendor === bulkVendor);
+    if (targets.length === 0) return;
+    setBulkApplying(true);
+    setBulkResult(null);
+    try {
+      const response = await fetch("/api/sourcing-type", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          variantIds: targets.map((v) => v.id),
+          sourcingType: bulkSourcingType,
+        }),
+      });
+      const result = await response.json();
+      setBulkResult({
+        count: result.success?.length || 0,
+        failed: result.failed?.length || 0,
+      });
+      revalidator.revalidate();
+    } catch (error) {
+      setBulkResult({ count: 0, failed: targets.length, error: error.message });
+    } finally {
+      setBulkApplying(false);
+    }
+  };
+
   // Helper to get supplier name(s) from variant
   const getSupplierName = useCallback((variant) => {
     const metafield = variant.metafields.find(
@@ -397,6 +526,53 @@ export default function ProductsPage() {
         <BlockStack gap="400">
           <AppNavigation />
 
+          <Card>
+            <BlockStack gap="300">
+              <Text variant="headingSm" as="h3">
+                Bulk-set sourcing by vendor
+              </Text>
+              <InlineStack gap="300" blockAlign="end">
+                <div style={{ minWidth: 220 }}>
+                  <Select
+                    label="Vendor"
+                    options={vendorOptions}
+                    value={bulkVendor}
+                    onChange={(v) => {
+                      setBulkVendor(v);
+                      setBulkResult(null);
+                    }}
+                  />
+                </div>
+                <div style={{ minWidth: 220 }}>
+                  <Select
+                    label="Sourcing type"
+                    options={SOURCING_TYPE_OPTIONS}
+                    value={bulkSourcingType}
+                    onChange={(v) => {
+                      setBulkSourcingType(v);
+                      setBulkResult(null);
+                    }}
+                  />
+                </div>
+                <Button onClick={applyBulkSourcing} loading={bulkApplying}>
+                  Apply to{" "}
+                  {
+                    variants.filter((v) => bulkVendor === "all" || v.vendor === bulkVendor)
+                      .length
+                  }{" "}
+                  variants
+                </Button>
+                {bulkResult && (
+                  <Text variant="bodySm" tone={bulkResult.failed ? "critical" : "success"} as="span">
+                    {bulkResult.error
+                      ? `Failed: ${bulkResult.error}`
+                      : `Updated ${bulkResult.count}${bulkResult.failed ? `, ${bulkResult.failed} failed` : ""}`}
+                  </Text>
+                )}
+              </InlineStack>
+            </BlockStack>
+          </Card>
+
           <IndexFilters
             queryValue={queryValue}
             queryPlaceholder="Search by SKU or Product..."
@@ -425,11 +601,12 @@ export default function ProductsPage() {
                 { title: "Status" },
                 { title: "On Hand" },
                 { title: "Supplier" },
+                { title: "Sourcing" },
                 { title: "Actions" },
               ]}
               selectable={false}
               loading={isLoading}
-              sortable={[true, true, true, false, true, true, false]}
+              sortable={[true, true, true, false, true, true, false, false]}
               sortDirection={sortDirection}
               sortColumnIndex={
                 sortColumn === "sku" ? 0 :
@@ -468,9 +645,27 @@ export default function ProductsPage() {
                   <IndexTable.Cell>{variant.inventoryQuantity}</IndexTable.Cell>
                   <IndexTable.Cell>{getSupplierName(variant)}</IndexTable.Cell>
                   <IndexTable.Cell>
-                    <Button size="slim" onClick={() => openEdit(variant)}>
-                      Edit Supplier
-                    </Button>
+                    {(() => {
+                      const type = getSourcingType(variant);
+                      const badge = type ? SOURCING_TYPE_BADGE[type] : null;
+                      return badge ? (
+                        <Badge tone={badge.tone}>{badge.label}</Badge>
+                      ) : (
+                        <Text variant="bodySm" tone="subdued" as="span">
+                          Unclassified
+                        </Text>
+                      );
+                    })()}
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    <InlineStack gap="200">
+                      <Button size="slim" onClick={() => openEdit(variant)}>
+                        Edit Supplier
+                      </Button>
+                      <Button size="slim" onClick={() => openSourcingEdit(variant)}>
+                        Set Sourcing
+                      </Button>
+                    </InlineStack>
                   </IndexTable.Cell>
                 </IndexTable.Row>
               ))}
@@ -722,6 +917,93 @@ export default function ProductsPage() {
                 </InlineStack>
               </BlockStack>
             </Card>
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
+      <Modal
+        open={sourcingModalOpen}
+        onClose={() => {
+          setSourcingModalOpen(false);
+          setSourcingVariant(null);
+        }}
+        title="Set Sourcing Type"
+        primaryAction={{ content: "Save", onAction: saveSourcing, loading: sourcingSaving }}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            {sourcingVariant && (
+              <Card>
+                <BlockStack gap="150">
+                  <Text variant="bodyMd" as="p">
+                    <Text as="span" fontWeight="semibold">Product:</Text>{" "}
+                    {sourcingVariant.productTitle}
+                  </Text>
+                  <Text variant="bodyMd" as="p">
+                    <Text as="span" fontWeight="semibold">SKU:</Text> {sourcingVariant.sku || "N/A"}
+                  </Text>
+                  <Text variant="bodyMd" as="p">
+                    <Text as="span" fontWeight="semibold">On Hand:</Text>{" "}
+                    {sourcingVariant.inventoryQuantity}
+                  </Text>
+                </BlockStack>
+              </Card>
+            )}
+
+            <Select
+              label="Sourcing Type"
+              options={SOURCING_TYPE_OPTIONS}
+              value={sourcingForm.sourcing_type}
+              onChange={(v) => setSourcingForm({ ...sourcingForm, sourcing_type: v })}
+            />
+
+            {sourcingForm.sourcing_type === "repro" && (
+              <Card>
+                <BlockStack gap="300">
+                  <Text variant="headingSm" as="h3">Repro Settings</Text>
+                  <InlineStack gap="400">
+                    <div style={{ flex: 1 }}>
+                      <TextField
+                        label="Run Size"
+                        type="number"
+                        value={sourcingForm.run_size}
+                        onChange={(v) => setSourcingForm({ ...sourcingForm, run_size: v })}
+                        min="0"
+                        helpText="Units produced per production run"
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <TextField
+                        label="MOQ"
+                        type="number"
+                        value={sourcingForm.moq}
+                        onChange={(v) => setSourcingForm({ ...sourcingForm, moq: v })}
+                        min="0"
+                        helpText="Minimum order quantity"
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <TextField
+                        label="Run Cost ($)"
+                        type="number"
+                        value={sourcingForm.run_cost}
+                        onChange={(v) => setSourcingForm({ ...sourcingForm, run_cost: v })}
+                        min="0"
+                        step="0.01"
+                        prefix="$"
+                        helpText="Flat cost to run one batch"
+                      />
+                    </div>
+                  </InlineStack>
+                  <TextField
+                    label="Tooling Notes"
+                    value={sourcingForm.tooling_notes}
+                    onChange={(v) => setSourcingForm({ ...sourcingForm, tooling_notes: v })}
+                    multiline={2}
+                  />
+                </BlockStack>
+              </Card>
+            )}
           </BlockStack>
         </Modal.Section>
       </Modal>
