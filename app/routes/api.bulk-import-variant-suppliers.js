@@ -1,5 +1,5 @@
 import { authenticate } from "../shopify.server";
-import { writeThroughSupplierData, writeThroughSourcingType } from "../services/sync.server";
+import { writeThroughSupplierData, writeThroughSourcingType, writeThroughLocation, normalizeCrossRef } from "../services/sync.server";
 
 const VALID_SOURCING_TYPES = ["nos", "repro", "resale"];
 
@@ -54,6 +54,7 @@ export async function action({ request }) {
     // Group by SKU
     const groupedBySKU = {};
     const sourcingBySKU = {};
+    const locationBySKU = {};
     for (const item of variantSuppliers) {
       const sku = item.sku;
       if (!sku) continue;
@@ -84,6 +85,14 @@ export async function action({ request }) {
           run_size: parseInt(item.repro_run_size) || 0,
           moq: parseInt(item.repro_moq) || 0,
           run_cost: parseFloat(item.repro_run_cost) || 0,
+        };
+      }
+
+      // location/cross_refs are also per-SKU — take the first non-empty occurrence.
+      if (!locationBySKU[sku] && (item.location || item.cross_refs?.length)) {
+        locationBySKU[sku] = {
+          location: (item.location || "").trim(),
+          cross_refs: (item.cross_refs || []).map(normalizeCrossRef).filter(Boolean),
         };
       }
     }
@@ -315,6 +324,38 @@ export async function action({ request }) {
               }
             } catch (sourcingError) {
               console.error(`Sourcing type import failed for ${sku}:`, sourcingError);
+            }
+          }
+
+          const location = locationBySKU[sku];
+          if (location) {
+            try {
+              const locationResponse = await admin.graphql(mutation, {
+                variables: {
+                  metafields: [
+                    {
+                      ownerId: variant.id,
+                      namespace: "inventory",
+                      key: "location",
+                      type: "single_line_text_field",
+                      value: location.location,
+                    },
+                    {
+                      ownerId: variant.id,
+                      namespace: "inventory",
+                      key: "cross_refs",
+                      type: "list.single_line_text_field",
+                      value: JSON.stringify(location.cross_refs),
+                    },
+                  ],
+                },
+              });
+              const locationData = await locationResponse.json();
+              if (!locationData.data?.metafieldsSet?.userErrors?.length) {
+                await writeThroughLocation(session.shop, variant.id, location.location, location.cross_refs);
+              }
+            } catch (locationError) {
+              console.error(`Location import failed for ${sku}:`, locationError);
             }
           }
 
