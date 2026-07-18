@@ -16,9 +16,16 @@ import { useState, useMemo, useCallback } from "react";
 import { useLoaderData, useRevalidator } from "react-router";
 import AppNavigation from "../components/AppNavigation";
 import { loadCatalogForRoute } from "../services/catalog-queries.server";
+import { getScarcityReports } from "../services/scarcity.server";
+import { authenticate } from "../shopify.server";
 
 export async function loader({ request }) {
-  return loadCatalogForRoute(request);
+  const { session } = await authenticate.admin(request);
+  const [catalogData, scarcity] = await Promise.all([
+    loadCatalogForRoute(request),
+    getScarcityReports(session.shop),
+  ]);
+  return { ...catalogData, ...scarcity };
 }
 
 // Helper function to get metafield value
@@ -127,8 +134,38 @@ function calculateMetrics(variant, suppliers) {
   };
 }
 
+/* eslint-disable react/prop-types -- internal presentational helper, not a public component */
+function ScarcityTable({ title, subtitle, rows, columns }) {
+  if (!rows.length) return null;
+  return (
+    <Card>
+      <BlockStack gap="200">
+        <BlockStack gap="050">
+          <Text variant="headingSm" as="h3">{title}</Text>
+          <Text variant="bodySm" tone="subdued" as="p">{subtitle}</Text>
+        </BlockStack>
+        <IndexTable
+          resourceName={{ singular: "part", plural: "parts" }}
+          itemCount={rows.length}
+          headings={columns.map((c) => ({ title: c.title }))}
+          selectable={false}
+        >
+          {rows.map((row, index) => (
+            <IndexTable.Row id={row.id} key={row.id} position={index}>
+              {columns.map((c) => (
+                <IndexTable.Cell key={c.key}>{c.render ? c.render(row) : row[c.key]}</IndexTable.Cell>
+              ))}
+            </IndexTable.Row>
+          ))}
+        </IndexTable>
+      </BlockStack>
+    </Card>
+  );
+}
+/* eslint-enable react/prop-types */
+
 export default function Report() {
-  const { variants, suppliers } = useLoaderData();
+  const { variants, suppliers, deadStock, fastMoverUnderpriced, reproCandidates } = useLoaderData();
   const revalidator = useRevalidator();
   const isLoading = revalidator.state === "loading";
   const [queryValue, setQueryValue] = useState("");
@@ -339,6 +376,41 @@ export default function Report() {
       <Page fullWidth>
         <BlockStack gap="400">
           <AppNavigation />
+
+          <ScarcityTable
+            title="Dead stock"
+            subtitle="NOS, still on the shelf, zero sales in the trailing year"
+            rows={deadStock}
+            columns={[
+              { key: "sku", title: "SKU" },
+              { key: "productTitle", title: "Product" },
+              { key: "inventoryQuantity", title: "On Hand" },
+              { key: "binLocation", title: "Bin", render: (r) => r.binLocation || "–" },
+            ]}
+          />
+
+          <ScarcityTable
+            title="Fast-mover, underpriced"
+            subtitle="NOS parts outselling the 75th percentile of the whole catalog — a pricing opportunity"
+            rows={fastMoverUnderpriced}
+            columns={[
+              { key: "sku", title: "SKU" },
+              { key: "productTitle", title: "Product" },
+              { key: "inventoryQuantity", title: "On Hand" },
+              { key: "velocity30", title: "Units/day (30d)", render: (r) => Number(r.velocity30).toFixed(2) },
+            ]}
+          />
+
+          <ScarcityTable
+            title="Repro candidates"
+            subtitle="NOS parts that are gone but have real lifetime demand — worth tooling a run for"
+            rows={reproCandidates}
+            columns={[
+              { key: "sku", title: "SKU" },
+              { key: "productTitle", title: "Product" },
+              { key: "lifetimeQty", title: "Lifetime Units Sold" },
+            ]}
+          />
 
           <IndexFilters
             queryValue={queryValue}

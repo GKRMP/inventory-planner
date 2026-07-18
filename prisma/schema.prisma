@@ -78,16 +78,52 @@ model Variant {
   velocity90        Float? // avg units/day, trailing 90 days
   velocity365       Float? // avg units/day, trailing 365 days
   velocityUpdatedAt DateTime? // last time recomputeVelocities touched this row
+  binLocation       String? // mirror of inventory.location metafield — barn/warehouse bin
+  crossRefs         String[] @default([]) // mirror of inventory.cross_refs metafield, normalized (no spaces/dashes)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  product   Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
-  sources   VariantSource[]
-  salesDays VariantSalesDay[]
+  product        Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sources        VariantSource[]
+  salesDays      VariantSalesDay[]
+  cycleCountRows CycleCountItem[]
 
   @@index([shop, sku])
   @@index([shop, productId])
   @@index([shop, sourcingType])
+  @@index([shop, binLocation])
+}
+
+// A barn/warehouse walk: pick a bin or search filter, count what's actually
+// there, compare to the mirror's inventoryQuantity. Corrections are optional
+// and go through the same inventory-adjust helper Phase 4 uses for receiving.
+model CycleCountSession {
+  id        String    @id @default(cuid())
+  shop      String
+  name      String
+  status    String    @default("OPEN") // OPEN|CLOSED
+  createdAt DateTime  @default(now())
+  closedAt  DateTime?
+
+  items CycleCountItem[]
+
+  @@index([shop, status])
+}
+
+model CycleCountItem {
+  id          String    @id @default(cuid())
+  sessionId   String
+  variantId   String
+  expectedQty Int // inventoryQuantity mirror value at the time the item was added
+  countedQty  Int?
+  verifiedAt  DateTime?
+  note        String?
+
+  session CycleCountSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  variant Variant           @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, variantId])
+  @@index([variantId])
 }
 
 // Daily sales aggregate per variant, built by the orders bulk-op backfill

@@ -8,6 +8,8 @@ const navItems = [
   { id: "supplier-summary", content: "Supplier Summary", path: "/app/supplier-dashboard" },
   { id: "suppliers", content: "Suppliers", path: "/app/additional" },
   { id: "import", content: "Import", path: "/app/import" },
+  { id: "intake", content: "Intake", path: "/app/intake" },
+  { id: "cycle-counts", content: "Cycle Counts", path: "/app/cycle-counts" },
 ];
 
 export default function AppNavigation() {

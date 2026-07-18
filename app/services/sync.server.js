@@ -34,11 +34,24 @@ const BULK_VARIANTS_QUERY = `
           reproSettings: metafield(namespace: "inventory", key: "repro_settings") {
             value
           }
+          binLocation: metafield(namespace: "inventory", key: "location") {
+            value
+          }
+          crossRefs: metafield(namespace: "inventory", key: "cross_refs") {
+            value
+          }
         }
       }
     }
   }
 `;
+
+// Cross-refs are matched by exact string after stripping whitespace/dashes so
+// "GM 12345-67" and "gm1234567" hit the same part. Shared by the bulk sync,
+// write-through, and any future search/lookup.
+export function normalizeCrossRef(value) {
+  return String(value || "").replace(/[\s-]/g, "").toUpperCase();
+}
 
 function safeParseJson(value) {
   if (value === null || value === undefined) return null;
@@ -71,6 +84,15 @@ function reproSettingsToColumns(raw) {
     reproRunCost: Number.isFinite(parseFloat(parsed.run_cost)) ? parseFloat(parsed.run_cost) : null,
     reproToolingNotes: parsed.tooling_notes || null,
   };
+}
+
+// Flattens a variant's cross_refs metafield (list.single_line_text_field —
+// stored as a JSON array string) into the normalized string array Prisma
+// expects. Shared by the bulk sync and metafield write-through.
+function crossRefsToColumn(raw) {
+  const parsed = typeof raw === "string" ? safeParseJson(raw) : raw;
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map(normalizeCrossRef).filter(Boolean);
 }
 
 export async function upsertVariantSources(shop, variantId, raw) {
@@ -122,9 +144,13 @@ export async function upsertVariantMirror(shop, fields) {
     supplierDataRaw,
     sourcingType,
     reproSettingsRaw,
+    binLocation,
+    crossRefsRaw,
   } = fields;
   const reproColumns =
     reproSettingsRaw !== undefined ? reproSettingsToColumns(reproSettingsRaw) : undefined;
+  const crossRefs =
+    crossRefsRaw !== undefined ? crossRefsToColumn(crossRefsRaw) : undefined;
 
   if (product?.id) {
     await prisma.product.upsert({
@@ -156,7 +182,9 @@ export async function upsertVariantMirror(shop, fields) {
       inventoryItemId: inventoryItemId ?? null,
       supplierDataRaw: supplierDataRaw ?? undefined,
       sourcingType: sourcingType ?? null,
+      binLocation: binLocation ?? null,
       ...(reproColumns ?? {}),
+      ...(crossRefs !== undefined ? { crossRefs } : {}),
     },
     update: {
       ...(product?.id !== undefined ? { productId: product.id } : {}),
@@ -166,7 +194,9 @@ export async function upsertVariantMirror(shop, fields) {
       ...(inventoryItemId !== undefined ? { inventoryItemId } : {}),
       ...(supplierDataRaw !== undefined ? { supplierDataRaw } : {}),
       ...(sourcingType !== undefined ? { sourcingType } : {}),
+      ...(binLocation !== undefined ? { binLocation } : {}),
       ...(reproColumns ?? {}),
+      ...(crossRefs !== undefined ? { crossRefs } : {}),
     },
   });
 
@@ -198,6 +228,20 @@ export async function writeThroughSourcingType(shop, variantId, sourcingType, re
     data: {
       sourcingType: sourcingType || null,
       ...reproSettingsToColumns(reproSettings || null),
+    },
+  });
+}
+
+// Write-through helper for api.variant-location.js: only touches the
+// location/cross-refs mirror columns, since that endpoint doesn't have full
+// product/variant context. No-op if the variant row doesn't exist yet — the
+// next bulk sync catches it up.
+export async function writeThroughLocation(shop, variantId, binLocation, crossRefs) {
+  await prisma.variant.updateMany({
+    where: { id: variantId, shop },
+    data: {
+      binLocation: binLocation || null,
+      crossRefs: (crossRefs || []).map(normalizeCrossRef).filter(Boolean),
     },
   });
 }
@@ -292,6 +336,8 @@ async function flushVariantBatch(shop, nodes) {
       supplierDataRaw: node.metafield?.value ? safeParseJson(node.metafield.value) : null,
       sourcingType: node.sourcingType?.value || null,
       reproSettingsRaw: node.reproSettings?.value ? safeParseJson(node.reproSettings.value) : null,
+      binLocation: node.binLocation?.value || null,
+      crossRefsRaw: node.crossRefs?.value || null,
     });
   }
 }
