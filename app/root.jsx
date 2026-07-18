@@ -7,6 +7,7 @@ export default function Root() {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <title>RM Parts Inventory Management Program</title>
         <Meta />
         <Links />
       </head>

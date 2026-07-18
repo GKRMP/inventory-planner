@@ -190,7 +190,7 @@ export default function SupplierDashboard() {
 
   return (
     <>
-      <TitleBar title="RMP Inventory Planner">
+      <TitleBar title="RM Parts Inventory Management Program">
         <button variant="primary" onClick={() => navigate("/app/purchase-orders")}>
           Purchase Orders
         </button>

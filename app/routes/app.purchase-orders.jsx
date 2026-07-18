@@ -43,7 +43,7 @@ export default function PurchaseOrdersPage() {
 
   return (
     <>
-      <TitleBar title="RMP Inventory Planner" />
+      <TitleBar title="RM Parts Inventory Management Program" />
       <Page title="Purchase Orders" fullWidth>
         <BlockStack gap="400">
           <Card>

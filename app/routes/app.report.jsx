@@ -372,7 +372,7 @@ export default function Report() {
 
   return (
     <>
-      <TitleBar title="RMP Inventory Planner" />
+      <TitleBar title="RM Parts Inventory Management Program" />
       <Page fullWidth>
         <BlockStack gap="400">
           <AppNavigation />
