@@ -293,7 +293,7 @@ const MONO = { fontFamily: "'IBM Plex Mono', monospace" };
 // ─── component ───────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const { variants, suppliers, syncPending } = useLoaderData();
+  const { variants, suppliers, syncPending, draftPOSeed } = useLoaderData();
   const revalidator = useRevalidator();
   const isLoading = revalidator.state === "loading";
   const refreshProducts = useCallback(() => revalidator.revalidate(), [revalidator]);
@@ -307,7 +307,8 @@ export default function Dashboard() {
   const [detailSup, setDetailSup] = useState(null);
   const [detailQty, setDetailQty] = useState(0);
   const [poOpen, setPoOpen] = useState(false);
-  const [po, setPo] = useState({});
+  const [po, setPo] = useState(() => draftPOSeed || {});
+  const poSaveFetcher = useFetcher();
   const [prodSup, setProdSup] = useState("all");
   const [toast, setToast] = useState("");
   const toastRef = useRef(null);
@@ -501,6 +502,17 @@ export default function Dashboard() {
     showToast(supFormMode === "add" ? "Supplier added" : "Supplier updated");
   }, [supFetcher.state, supFetcher.data, supFormMode, showToast, refreshSuppliers]);
 
+  useEffect(() => {
+    if (poSaveFetcher.state !== "idle" || !poSaveFetcher.data) return;
+    if (poSaveFetcher.data.error) {
+      showToast(poSaveFetcher.data.error);
+      return;
+    }
+    showToast("Draft purchase order saved");
+    setPoOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poSaveFetcher.state, poSaveFetcher.data, showToast]);
+
   const openDetail = useCallback(
     (id) => {
       const part = enriched.find((e) => e.id === id);
@@ -692,6 +704,31 @@ export default function Dashboard() {
     [po, enriched]
   );
   const poSupCount = new Set(poIds.map((id) => po[id]?.supId)).size;
+
+  const saveDraft = useCallback(() => {
+    const groups = {};
+    poIds.forEach((id) => {
+      const e = enriched.find((p) => p.id === id);
+      const rec = po[id];
+      if (!e || !rec?.supId) return;
+      const src = e.sources.find((s) => s.sup === rec.supId) || e.recommended;
+      (groups[rec.supId] ||= []).push({
+        variantId: id,
+        sku: e.sku,
+        mpn: src?.mpn || "",
+        qty: rec.qty,
+        unitCost: src?.cpu || 0,
+      });
+    });
+    const supplierGroups = Object.entries(groups).map(([supplierId, items]) => ({ supplierId, items }));
+    if (!supplierGroups.length) return;
+    poSaveFetcher.submit(JSON.stringify({ supplierGroups }), {
+      method: "POST",
+      action: "/api/purchase-orders",
+      encType: "application/json",
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poIds, po, enriched]);
 
   const distDef = [
     { key: "out", label: "Out of stock", color: "#b42318" },
@@ -3181,12 +3218,8 @@ export default function Dashboard() {
                   </span>
                 </div>
                 <button
-                  onClick={() => {
-                    showToast(
-                      "Purchase order exported (" + poItems.length + " items)"
-                    );
-                    setPoOpen(false);
-                  }}
+                  onClick={saveDraft}
+                  disabled={poSaveFetcher.state !== "idle"}
                   className="rmp-btn-dark"
                   style={{
                     width: "100%",
@@ -3199,9 +3232,10 @@ export default function Dashboard() {
                     fontFamily: "inherit",
                     fontWeight: 600,
                     fontSize: 14,
+                    opacity: poSaveFetcher.state !== "idle" ? 0.7 : 1,
                   }}
                 >
-                  Export purchase order
+                  {poSaveFetcher.state !== "idle" ? "Saving…" : "Save draft"}
                 </button>
               </div>
             )}

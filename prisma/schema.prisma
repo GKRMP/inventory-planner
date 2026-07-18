@@ -151,6 +151,46 @@ model SyncState {
   updatedAt         DateTime  @updatedAt
 }
 
+// Draft/sent/received purchase orders. supplierId is a soft reference to
+// Supplier.supplierId (business key), same convention as VariantSource,
+// since a PO can be drafted for a supplier before its metaobject syncs.
+model PurchaseOrder {
+  id         String    @id @default(cuid())
+  shop       String
+  number     Int // sequential per shop, assigned on create
+  supplierId String
+  status     String    @default("DRAFT") // DRAFT|SENT|PARTIAL|RECEIVED|CANCELLED
+  notes      String?
+  sentAt     DateTime?
+  receivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  lineItems POLineItem[]
+
+  @@unique([shop, number])
+  @@index([shop, status])
+  @@index([shop, supplierId])
+}
+
+model POLineItem {
+  id              String   @id @default(cuid())
+  purchaseOrderId String
+  variantId       String // variant GID — not FK'd to Variant since a PO should survive a variant mirror gap
+  sku             String?
+  mpn             String?
+  qtyOrdered      Int
+  qtyReceived     Int      @default(0)
+  unitCost        Float    @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseOrderId])
+  @@index([variantId])
+}
+
 model Session {
   id                  String    @id
   shop                String

@@ -1,5 +1,6 @@
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
+import { getDraftPOSeed } from "./purchase-orders.server";
 
 // Reconstructs the metaobject-fields shape ({id, handle, fields: [{key, value}]})
 // that app.dashboard.jsx's supMap builder and every other consumer already
@@ -135,10 +136,11 @@ export async function loadCatalogForRoute(request, { status = "ACTIVE" } = {}) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const [variants, suppliers, syncState] = await Promise.all([
+  const [variants, suppliers, syncState, draftPOSeed] = await Promise.all([
     getVariantsWithSources(shop, { status }),
     getSuppliers(shop),
     getSyncState(shop),
+    getDraftPOSeed(shop),
   ]);
 
   return {
@@ -146,6 +148,7 @@ export async function loadCatalogForRoute(request, { status = "ACTIVE" } = {}) {
     suppliers,
     lastFullSyncAt: syncState?.lastFullSyncAt ?? null,
     syncPending: !syncState?.lastFullSyncAt,
+    draftPOSeed,
   };
 }
 
