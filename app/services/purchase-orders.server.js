@@ -1,5 +1,6 @@
 import prisma from "../db.server";
 import { writeThroughSupplierData } from "./sync.server";
+import { adjustInventoryQuantity } from "./inventory.server";
 
 // Purchase orders are Postgres-native (no Shopify metaobject mirror) — the
 // only Shopify-side effect is the inventory adjustment + supplier_data
@@ -242,30 +243,14 @@ export async function receiveLine(shop, { admin, lineItemId, qty }) {
   if (!variant?.inventoryItemId) return { error: "Variant is missing its inventory item id — run a sync first" };
   if (!syncState?.locationId) return { error: "No location on file yet — run a sync first" };
 
-  const response = await admin.graphql(
-    `
-      mutation ReceivePOLine($input: InventoryAdjustQuantitiesInput!) {
-        inventoryAdjustQuantities(input: $input) {
-          userErrors { field message }
-        }
-      }
-    `,
-    {
-      variables: {
-        input: {
-          name: "available",
-          reason: "received",
-          referenceDocumentUri: `gid://rmp-inventory-planner/PurchaseOrder/${line.purchaseOrderId}`,
-          changes: [
-            { delta: receiveQty, inventoryItemId: variant.inventoryItemId, locationId: syncState.locationId },
-          ],
-        },
-      },
-    }
-  );
-  const result = await response.json();
-  const userErrors = result?.data?.inventoryAdjustQuantities?.userErrors || [];
-  if (userErrors.length) return { error: userErrors.map((e) => e.message).join("; ") };
+  const adjustment = await adjustInventoryQuantity(admin, {
+    inventoryItemId: variant.inventoryItemId,
+    locationId: syncState.locationId,
+    delta: receiveQty,
+    reason: "received",
+    referenceDocumentUri: `gid://rmp-inventory-planner/PurchaseOrder/${line.purchaseOrderId}`,
+  });
+  if (adjustment.error) return adjustment;
 
   await recordReceiptOnSupplierData(admin, shop, line, line.purchaseOrder.supplierId, receiveQty);
 

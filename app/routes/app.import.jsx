@@ -134,6 +134,8 @@ function transformRows(rows) {
     repro_run_size: parseInt(row["ReproRunSize"]) || 0,
     repro_moq: parseInt(row["ReproMoq"]) || 0,
     repro_run_cost: parseFloat(row["ReproRunCost"]) || 0,
+    location: row["Location"] || "",
+    cross_refs: (row["CrossRefs"] || "").split(";").map((s) => s.trim()).filter(Boolean),
   }));
 }
 
@@ -244,10 +246,10 @@ export default function ImportPage() {
 
               <Banner tone="info">
                 <Text variant="bodyMd" as="p">
-                  <strong>CSV Format:</strong> SKU, SupplierID, MPN, IsPrimary, LeadTime, Threshold, DailyDemand, LastOrderDate, LastOrderCPU, LastOrderQty, Notes, SourcingType, ReproRunSize, ReproMoq, ReproRunCost
+                  <strong>CSV Format:</strong> SKU, SupplierID, MPN, IsPrimary, LeadTime, Threshold, DailyDemand, LastOrderDate, LastOrderCPU, LastOrderQty, Notes, SourcingType, ReproRunSize, ReproMoq, ReproRunCost, Location, CrossRefs
                 </Text>
                 <Text variant="bodySm" as="p" tone="subdued">
-                  SourcingType and the Repro* columns are optional. SourcingType must be nos, repro, or resale.
+                  SourcingType, the Repro* columns, Location, and CrossRefs are optional. SourcingType must be nos, repro, or resale. CrossRefs is a semicolon-separated list (e.g. &quot;ABC123;XYZ789&quot;).
                 </Text>
               </Banner>
 

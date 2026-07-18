@@ -52,6 +52,14 @@ function riskOf(onHand, dts) {
   return { key: "healthy", label: "Healthy", text: "#067647", bg: "#ecfdf3", dot: "#17b26a" };
 }
 
+function matchesSearch(e, q) {
+  if (!q) return true;
+  if (e.sku.toLowerCase().includes(q) || e.name.toLowerCase().includes(q)) return true;
+  if (e.binLocation && e.binLocation.toLowerCase().includes(q)) return true;
+  const normalizedQ = q.replace(/[\s-]/g, "").toUpperCase();
+  return e.crossRefs.some((ref) => ref.includes(normalizedQ));
+}
+
 function money(n) {
   return (
     "$" +
@@ -146,6 +154,8 @@ function enrichVariant(variant, supplierMap) {
       isRepro: false,
       lastOne,
       goneForever,
+      binLocation: variant.binLocation || "",
+      crossRefs: variant.crossRefs || [],
     };
   }
 
@@ -248,6 +258,8 @@ function enrichVariant(variant, supplierMap) {
     demandIsOverride,
     computedDemand,
     computedDemandStr: computedDemand.toFixed(1),
+    binLocation: variant.binLocation || "",
+    crossRefs: variant.crossRefs || [],
   };
 }
 
@@ -600,9 +612,7 @@ export default function Dashboard() {
   const reportRows = useMemo(() => {
     let rows = enriched
       .filter((e) => reportFilter === "all" || e.risk.key === reportFilter)
-      .filter(
-        (e) => !q || e.sku.toLowerCase().includes(q) || e.name.toLowerCase().includes(q)
-      );
+      .filter((e) => matchesSearch(e, q));
     rows.sort((a, b) => (sortDir === "asc" ? a.dts - b.dts : b.dts - a.dts));
     return rows;
   }, [enriched, reportFilter, q, sortDir]);
@@ -611,9 +621,7 @@ export default function Dashboard() {
     () =>
       enriched
         .filter((e) => prodSup === "all" || e.sources.some((s) => s.sup === prodSup))
-        .filter(
-          (e) => !q || e.sku.toLowerCase().includes(q) || e.name.toLowerCase().includes(q)
-        ),
+        .filter((e) => matchesSearch(e, q)),
     [enriched, prodSup, q]
   );
 
@@ -2632,6 +2640,11 @@ export default function Dashboard() {
                   >
                     {detail.name}
                   </div>
+                  {detail.binLocation && (
+                    <div style={{ ...MONO, fontSize: 11.5, color: "#9a968e", marginTop: 4 }}>
+                      Bin {detail.binLocation}
+                    </div>
+                  )}
                 </div>
                 <button
                   onClick={() => setSelectedId(null)}

@@ -80,6 +80,19 @@ function variantToShape(v) {
     });
   }
 
+  if (v.binLocation) {
+    metafields.push({ id: `${v.id}-location`, namespace: "inventory", key: "location", value: v.binLocation });
+  }
+
+  if (v.crossRefs?.length) {
+    metafields.push({
+      id: `${v.id}-cross_refs`,
+      namespace: "inventory",
+      key: "cross_refs",
+      value: JSON.stringify(v.crossRefs),
+    });
+  }
+
   return {
     id: v.id,
     sku: v.sku || "",
@@ -91,6 +104,8 @@ function variantToShape(v) {
     velocity30: v.velocity30 || 0,
     velocity90: v.velocity90 || 0,
     velocity365: v.velocity365 || 0,
+    binLocation: v.binLocation || "",
+    crossRefs: v.crossRefs || [],
     metafields,
   };
 }
