@@ -348,6 +348,21 @@ export async function startBulkSync(admin, shop) {
     await prisma.syncState.updateMany({ where: { shop }, data: { error: error.message } });
   }
 
+  // Single-location assumption (see webhooks.inventory_levels.update.jsx) —
+  // `location` with no id argument returns the shop's primary location.
+  // Needed by PO receiving (purchase-orders.server.js) to call
+  // inventoryAdjustQuantities against the right location.
+  try {
+    const locationResp = await admin.graphql(`{ location { id } }`);
+    const locationData = await locationResp.json();
+    const locationId = locationData.data?.location?.id || null;
+    if (locationId) {
+      await prisma.syncState.updateMany({ where: { shop }, data: { locationId } });
+    }
+  } catch (error) {
+    console.error(`Primary location fetch failed for ${shop}:`, error);
+  }
+
   return { started: true, bulkOperationId: result.bulkOperation.id };
 }
 
