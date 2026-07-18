@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "0e3de3307af340c3981d819a4799239d"
-name = "RMP Inventory Planner"
+client_id = "9705298521e3436300e43eb906118164"
+name = "RMPimp"
 application_url = "https://inventory-planner-4rvw.onrender.com"
 embedded = true
 
@@ -9,35 +9,37 @@ embedded = true
 automatically_update_urls_on_dev = true
 
 [webhooks]
-api_version = "2026-04"
+api_version = "2026-07"
 
   [[webhooks.subscriptions]]
-  topics = [ "products/create" ]
-  uri = "/webhooks/products/create"
-
-  [[webhooks.subscriptions]]
-  topics = [ "products/update" ]
-  uri = "/webhooks/products/update"
-
-  [[webhooks.subscriptions]]
-  topics = [ "products/delete" ]
-  uri = "/webhooks/products/delete"
-
-  [[webhooks.subscriptions]]
-  topics = [ "inventory_levels/update" ]
-  uri = "/webhooks/inventory_levels/update"
-
-  [[webhooks.subscriptions]]
-  topics = [ "bulk_operations/finish" ]
   uri = "/webhooks/bulk_operations/finish"
+  topics = [ "bulk_operations/finish" ]
 
   [[webhooks.subscriptions]]
-  topics = [ "orders/create" ]
+  uri = "/webhooks/inventory_levels/update"
+  topics = [ "inventory_levels/update" ]
+
+  [[webhooks.subscriptions]]
   uri = "/webhooks/orders/create"
+  topics = [ "orders/create" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/products/create"
+  topics = [ "products/create" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/products/delete"
+  topics = [ "products/delete" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/products/update"
+  topics = [ "products/update" ]
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_metaobject_definitions,read_metaobjects,write_metaobject_definitions,write_metaobjects,write_products,read_inventory,read_orders,write_inventory"
+scopes = "read_inventory,read_metaobject_definitions,write_metaobject_definitions,read_metaobjects,write_metaobjects,read_orders,write_inventory,write_products"
+optional_scopes = [ ]
+use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [ "https://inventory-planner-4rvw.onrender.com/auth/callback" ]

@@ -282,6 +282,15 @@ const FONTS_CSS = `
   @keyframes rmp-spin { to { transform: rotate(360deg); } }
   @keyframes rmp-shimmer { 0% { background-position: -450px 0; } 100% { background-position: 450px 0; } }
   @keyframes rmp-slide { from { transform: translateX(30px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  @keyframes rmp-gold-shine { 0% { background-position: -150% 0; } 100% { background-position: 250% 0; } }
+  .rmp-gold-shine {
+    background: linear-gradient(100deg,#8a6a1e 0%,#f6e3a0 25%,#d8b856 45%,#fff6d8 55%,#8a6a1e 75%,#f6e3a0 100%);
+    background-size: 250% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: rmp-gold-shine 3.5s linear infinite;
+  }
   .rmp-app *, .rmp-app *::before, .rmp-app *::after { box-sizing: border-box; }
   .rmp-app { font-family: 'Hanken Grotesk', system-ui, -apple-system, sans-serif; }
   .rmp-app select:focus, .rmp-app input:focus { outline: none; }
@@ -867,33 +876,42 @@ export default function Dashboard() {
                   width: 34,
                   height: 34,
                   flex: "none",
-                  borderRadius: 9,
-                  background: "#232220",
-                  color: "#fff",
+                  borderRadius: "50%",
+                  background:
+                    "radial-gradient(circle at 35% 30%, #fff6d8, #d8b856 40%, #8a6a1e 75%, #4d3a10 100%)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  ...MONO,
-                  fontWeight: 600,
-                  fontSize: 13,
-                  letterSpacing: "-0.5px",
+                  boxShadow:
+                    "0 2px 5px rgba(0,0,0,.35), inset 0 1px 2px rgba(255,255,255,.6)",
                 }}
               >
-                RMP
+                <span
+                  style={{
+                    fontWeight: 900,
+                    fontSize: 17,
+                    color: "#3a2a08",
+                    textShadow: "0 1px 0 rgba(255,255,255,.4)",
+                  }}
+                >
+                  $
+                </span>
               </div>
               <div style={{ lineHeight: 1.25 }}>
                 <div
                   style={{
-                    fontWeight: 700,
+                    fontWeight: 800,
                     fontSize: 13.5,
                     letterSpacing: "-0.2px",
                     whiteSpace: "nowrap",
                   }}
                 >
-                  Inventory Planner
+                  RM<span className="rmp-gold-shine">PIMP</span>
                 </div>
-                <div style={{ fontSize: 11, color: "#9a968e", fontWeight: 500 }}>
-                  Roberts Motor Parts
+                <div
+                  style={{ fontSize: 11, color: "#9a968e", fontWeight: 500, whiteSpace: "nowrap" }}
+                >
+                  Parts Inventory Management Program
                 </div>
               </div>
             </div>
