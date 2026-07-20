@@ -370,16 +370,22 @@ export async function startBulkSync(admin, shop) {
     throw new Error(result.userErrors.map((e) => e.message).join("; "));
   }
 
+  // bulkOperationType must be set on every start, not just the orders one:
+  // the bulk_operations/finish webhook dispatches on it, and leaving a stale
+  // "orders" value here routes a finished catalog op into the orders
+  // completion handler — which silently skips the mirror refresh entirely.
   await prisma.syncState.upsert({
     where: { shop },
     create: {
       shop,
       bulkOperationId: result.bulkOperation.id,
       bulkStatus: result.bulkOperation.status,
+      bulkOperationType: "catalog",
     },
     update: {
       bulkOperationId: result.bulkOperation.id,
       bulkStatus: result.bulkOperation.status,
+      bulkOperationType: "catalog",
       error: null,
     },
   });
