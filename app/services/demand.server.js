@@ -198,6 +198,21 @@ export async function completeOrdersBulkSync(admin, shop, { since } = {}) {
     }
   }
 
+  // Guard against replacing the window using a JSONL that isn't an orders
+  // export. replaceSalesDayRange deletes before it inserts, so being handed
+  // the wrong payload (e.g. a catalog op misrouted here by a stale
+  // SyncState.bulkOperationType) would wipe the trailing window and write
+  // nothing back, zeroing every velocity. Orders always carry createdAt;
+  // productVariants never do, so a file of top-level nodes with no dates is
+  // positively the wrong export. Bail without touching existing rows.
+  const datedOrders = Array.from(orders.values()).filter((o) => o.date).length;
+  if (lines.length && !datedOrders) {
+    const reason = "Orders backfill aborted: bulk export contained no dated orders (wrong payload?)";
+    console.error(`${reason} for ${shop}`);
+    await prisma.syncState.updateMany({ where: { shop }, data: { error: reason } });
+    return { ok: false, reason };
+  }
+
   await replaceSalesDayRange(shop, sinceDate, rowsByKey);
 
   await prisma.syncState.upsert({

@@ -252,6 +252,20 @@ export async function receiveLine(shop, { admin, lineItemId, qty }) {
   });
   if (adjustment.error) return adjustment;
 
+  // Write the received qty straight into the mirror rather than waiting on
+  // the inventory_levels/update webhook to echo it back — same as cycle-count
+  // corrections do. A missed or unregistered webhook would otherwise leave
+  // the mirror permanently below Shopify's on-hand. Increment (not a computed
+  // absolute) so a concurrent webhook delivery can't clobber this write.
+  try {
+    await prisma.variant.update({
+      where: { id: line.variantId },
+      data: { inventoryQuantity: { increment: receiveQty } },
+    });
+  } catch (error) {
+    console.error(`Mirror inventory bump failed for ${line.variantId}:`, error);
+  }
+
   await recordReceiptOnSupplierData(admin, shop, line, line.purchaseOrder.supplierId, receiveQty);
 
   const updatedLine = await prisma.pOLineItem.update({
