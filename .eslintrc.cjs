@@ -89,6 +89,19 @@ module.exports = {
         node: true,
       },
     },
+
+    // Route modules are bundled for both the client and the server. Their
+    // loaders/actions run in Node and legitimately read `process.env`, which the
+    // bundler strips from the client build. Declare only `process` rather than
+    // enabling `env: { node: true }`, so genuinely server-only globals
+    // (`__dirname`, `require`, `Buffer`, `global`) are still reported when they
+    // leak into component code that does ship to the browser.
+    {
+      files: ["app/routes/**/*.{js,jsx,ts,tsx}"],
+      globals: {
+        process: "readonly",
+      },
+    },
   ],
   globals: {
     shopify: "readonly"
