@@ -1,44 +1,25 @@
 import { resolveAdminAndShop } from "../services/cron-auth.server";
+import {
+  fetchRegisteredWebhooks as fetchRegistered,
+  diffExpectedWebhooks as diffExpected,
+} from "../services/webhook-registry.server";
 
-// One-time recovery: registers webhook subscriptions directly through the
-// Admin API, using the app's own already-installed session, for shops where
-// `shopify app deploy` (which normally registers subscriptions declared in
-// shopify.app.*.toml) can't be run because the account lacks Partner
-// Dashboard org membership for this app's client_id. Mirrors the five
-// subscriptions declared in shopify.app.inventory-planner-422p.toml.
+// Registers webhook subscriptions directly through the Admin API, using the
+// app's own already-installed session, for shops where `shopify app deploy`
+// (which normally registers subscriptions declared in shopify.app.*.toml)
+// can't be run because the account lacks Partner Dashboard org membership for
+// this app's client_id. The expected set lives in webhook-registry.server.js,
+// shared with the health check so the two can't drift.
 //
-// GET  /api/setup-webhook  — reports which of the five are actually
-//      registered with Shopify vs. missing (diagnostic only, no writes).
+// Not just one-time recovery: a rebuilt app gets a new client_id and starts
+// with zero subscriptions, which is what silently froze the mirror on
+// 2026-07-15. POST is idempotent (it creates only what's missing), so it's
+// safe to call on a schedule to make registration self-healing.
+//
+// GET  /api/setup-webhook  — reports which are actually registered with
+//      Shopify vs. missing (diagnostic only, no writes).
 // POST /api/setup-webhook  — same auth as /api/sync (x-sync-secret header,
 //      or embedded-admin session); creates only the ones that are missing.
-const EXPECTED = [
-  { topic: "PRODUCTS_CREATE", path: "/webhooks/products/create" },
-  { topic: "PRODUCTS_UPDATE", path: "/webhooks/products/update" },
-  { topic: "PRODUCTS_DELETE", path: "/webhooks/products/delete" },
-  { topic: "INVENTORY_LEVELS_UPDATE", path: "/webhooks/inventory_levels/update" },
-  { topic: "BULK_OPERATIONS_FINISH", path: "/webhooks/bulk_operations/finish" },
-  { topic: "ORDERS_CREATE", path: "/webhooks/orders/create" },
-];
-
-function callbackUrlFor(appUrl, path) {
-  return `${appUrl.replace(/\/$/, "")}${path}`;
-}
-
-async function fetchRegistered(admin) {
-  const response = await admin.graphql(`
-    { webhookSubscriptions(first: 50) { edges { node { id topic callbackUrl } } } }
-  `);
-  const data = await response.json();
-  return data.data?.webhookSubscriptions?.edges?.map((e) => e.node) || [];
-}
-
-function diffExpected(appUrl, registered) {
-  return EXPECTED.map((exp) => {
-    const callbackUrl = callbackUrlFor(appUrl, exp.path);
-    const match = registered.find((r) => r.topic === exp.topic && r.callbackUrl === callbackUrl);
-    return { ...exp, callbackUrl, registered: !!match, id: match?.id || null };
-  });
-}
 
 export async function loader({ request }) {
   const { admin, shop } = await resolveAdminAndShop(request);
